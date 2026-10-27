@@ -7,6 +7,8 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { viewerSource } = require("./viewer-source.cjs");
 const { nativeBlockModels } = require("./native-block-models.cjs");
+const { padTerrainAtlas } = require("./terrain-atlas.cjs");
+const { installNativeEntityModels, nativeEntityCompatibility } = require("../src/native-entity-models.cjs");
 const root = path.resolve(__dirname, "..");
 const VERSION = "1.21.11";
 const CLIENT_SHA1 = "ba2df812c2d12e0219c489c4cd9a5e1f0760f5bd";
@@ -35,7 +37,7 @@ function walk(directory, prefix = "") {
   }
   if (hash(fs.readFileSync(jar), "sha1") !== CLIENT_SHA1) throw Error("Minecraft client checksum mismatch");
   const inputDigest = crypto.createHash("sha256").update(CLIENT_SHA1).update(fs.readFileSync(path.join(root,"package-lock.json")));
-  for (const file of [__filename, path.join(__dirname,"item-assets.cjs"),path.join(__dirname,"native-block-models.cjs"), ...["scripts/generate-viewer-assets.cjs", "scripts/build-font-glyphs.py", "src/resource-pack-block-assets.cjs", "src/enhanced-viewer.cjs"].map((file) => path.join(viewerRoot,file))]) inputDigest.update(fs.readFileSync(file));
+  for (const file of [__filename, ...["item-assets.cjs","native-block-models.cjs","native-block-cuboid.cjs","terrain-atlas.cjs"].map(file=>path.join(__dirname,file)),path.join(root,"src/native-entity-models.cjs"), ...["scripts/generate-viewer-assets.cjs", "scripts/build-font-glyphs.py", "src/resource-pack-block-assets.cjs", "src/item-model-assets.cjs"].map((file) => path.join(viewerRoot,file))]) inputDigest.update(fs.readFileSync(file));
   if (packRoot) for (const file of walk(packRoot).sort()) if (/\.(json|png|mcmeta)$/.test(file)) inputDigest.update(file).update(fs.readFileSync(path.join(packRoot,file)));
   const revision = inputDigest.digest("hex").slice(0,20);
   const destination = path.resolve(option("--output", path.join(root, ".assets")));
@@ -58,6 +60,7 @@ function walk(directory, prefix = "") {
   }
   console.log(JSON.stringify({nativeBlockModels:nativeBlockModels(path.join(output,"native"))}));
   execFileSync(process.execPath, [path.join(viewerRoot,"scripts/generate-viewer-assets.cjs"),"--client-jar",jar,"--output",output,"--resource-pack",path.join(output,"native")],{env,stdio:"inherit"});
+  console.log(JSON.stringify({terrainAtlas:await padTerrainAtlas(output,VERSION)}));
   const itemAssets = JSON.parse(execFileSync(process.execPath,[path.join(__dirname,"item-assets.cjs"),viewerRoot,output],{ env,encoding:"utf8",maxBuffer:32*1024*1024 }));
   const fontPath = path.join(output,"font.json");
   execFileSync("python3",[path.join(viewerRoot,"scripts/build-font-glyphs.py"),jar,"--minecraft-version",VERSION,"--expected-sha1",CLIENT_SHA1,"--output",fontPath],{ stdio:"inherit" });
@@ -73,6 +76,7 @@ function walk(directory, prefix = "") {
     "entity/sheep/sheep_fur": "entity/sheep/sheep_wool"
   };
   const models = require("prismarine-viewer/viewer/lib/entity/entities.json");
+  installNativeEntityModels(models);
   const entityTextures = {};
   // Entity geometry names and texture variant names are separate in upstream data.
   const entityTemplateTextures = {
@@ -82,8 +86,10 @@ function walk(directory, prefix = "") {
     villager: { default:"textures/entity/villager/villager" },
     zombie_villager: { default:"textures/entity/zombie_villager/zombie_villager" }
   };
-  const supportedEntities = [];
+  const supportedEntities = [], unsupportedEntities = {};
   for (const [type, model] of Object.entries(models)) {
+    const issue = nativeEntityCompatibility(type, model);
+    if (issue) { unsupportedEntities[type] = issue; continue; }
     let supported = true, renderedParts = 0;
     for (const variant of Object.keys(model.geometry ?? {})) {
       const texture = entityTemplateTextures[type]?.[variant] ?? model.textures?.[variant];
@@ -99,8 +105,9 @@ function walk(directory, prefix = "") {
       return (part.bones ?? []).every((bone) => !bone.parent || names.has(bone.parent));
     });
     if (supported && renderedParts && validSkeleton) supportedEntities.push(type);
+    else unsupportedEntities[type] = !validSkeleton ? "invalid-skeleton" : "native-texture-unavailable";
   }
-  for(const required of ["player","cow","pig","sheep","chicken"]) if(!supportedEntities.includes(required)) throw Error(`Required entity assets are missing: ${required}`);
+  for(const required of ["player","cow","pig","sheep","chicken","horse","zombie"]) if(!supportedEntities.includes(required)) throw Error(`Required entity assets are missing: ${required}`);
   const prepared=JSON.parse(fs.readFileSync(path.join(output,"blocksStates",`${VERSION}.json`),"utf8"));
   const intentionallyEmpty=new Set(["air","cave_air","void_air","water","lava","light","structure_void","barrier"]);
   const unsupportedBlocks=Object.entries(prepared).filter(([name,state]) => {
@@ -124,9 +131,9 @@ function walk(directory, prefix = "") {
     const bytes = fs.readFileSync(path.join(output, file));
     return [file, { sha256: hash(bytes), size: bytes.length, contentType: file.endsWith(".png") ? "image/png" : "application/json; charset=utf-8" }];
   }));
-  const manifest = { schemaVersion: 1, minecraftVersion: VERSION, revision, packName: packRoot ? "RusCrafting" : "Minecraft", atlas: `textures/${VERSION}.png`, blockStates: `blocksStates/${VERSION}.json`, font:"font.json", entityTextures, entityTemplateTextures, supportedEntities, unsupportedBlocks, items: itemAssets.items, itemModels: itemAssets.itemModels, files };
+  const manifest = { schemaVersion: 1, minecraftVersion: VERSION, revision, packName: packRoot ? "RusCrafting" : "Minecraft", atlas: `textures/${VERSION}.png`, blockStates: `blocksStates/${VERSION}.json`, font:"font.json", entityTextures, entityTemplateTextures, supportedEntities, unsupportedEntities, unsupportedBlocks, items: itemAssets.items, itemModels: itemAssets.itemModels, files };
   fs.writeFileSync(path.join(output, "manifest.json"), JSON.stringify(manifest));
   fs.writeFileSync(path.join(destination, "current.json"), JSON.stringify({ revision, manifest: `${revision}/manifest.json` }));
-  fs.writeFileSync(path.join(destination,"coverage.json"),JSON.stringify({ revision, unsupportedItems:itemAssets.unsupported,unsupportedBlocks }));
+  fs.writeFileSync(path.join(destination,"coverage.json"),JSON.stringify({ revision, unsupportedItems:itemAssets.unsupported,unsupportedBlocks,unsupportedEntities }));
   console.log(JSON.stringify({ revision, output, supportedEntities: supportedEntities.length, itemModels: Object.keys(itemAssets.items).length, unsupportedItems:itemAssets.unsupported.length }));
 })().catch((error) => { console.error(error); process.exitCode = 1; });

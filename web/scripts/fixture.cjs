@@ -55,16 +55,16 @@ for(const [x,z,h] of [[-20,-2,5],[-19,18,5],[19,17,6],[20,-18,5],[-3,-21,5],[17,
 fill(7,62,-19,18,63,-8,"farmland[moisture=7]");
 for(let z=-19;z<-8;z++) for(let x=7;x<18;x++) set(x,63,z,x===12?"air":"wheat[age=7]");
 fill(12,62,-19,13,63,-8,"water[level=0]");
-for(let x=5;x<=20;x++) for(const z of [-21,-6])set(x,63,z,"oak_fence[east=true,north=false,south=false,west=true,waterlogged=false]");
+for(let x=5;x<=20;x++) for(const z of [-21,-6])set(x,63,z,`oak_fence[east=${x<20},north=${z===-6&&(x===5||x===20)},south=${z===-21&&(x===5||x===20)},west=${x>5},waterlogged=false]`);
 for(let z=-20;z<-6;z++) for(const x of [5,20])set(x,63,z,"oak_fence[east=false,north=true,south=true,west=false,waterlogged=false]");
 fill(-2,63,5,3,64,10,"cobblestone");fill(-1,64,6,2,65,9,"water[level=0]");
 for(const x of [-2,2])for(const z of [5,9])fill(x,64,z,x+1,67,z+1,"oak_fence[east=false,north=false,south=false,west=false,waterlogged=false]");
 fill(-3,67,4,4,68,11,"spruce_slab[type=bottom,waterlogged=false]");
 for(const [x,z] of [[-5,4],[4,4],[-4,-4],[4,-4]]) { set(x,63,z,"cobblestone_wall[east=none,north=none,south=none,west=none,up=true,waterlogged=false]");set(x,64,z,"lantern[hanging=false,waterlogged=false]"); }
 for(let i=0;i<30;i++){const x=(i*13)%45-22,z=(i*19)%45-22;if(blocks.get(`${x},62,${z}`)==="minecraft:grass_block[snowy=false]")set(x,63,z,i%3?"short_grass":"poppy");}
-set(6,63,4,"chest[facing=south,type=single,waterlogged=false]");
-set(8,63,4,"chest[facing=south,type=right,waterlogged=false]");
-set(9,63,4,"chest[facing=south,type=left,waterlogged=false]");
+set(6,63,4,"chest[facing=north,type=single,waterlogged=false]");
+set(8,63,4,"chest[facing=north,type=left,waterlogged=false]");
+set(9,63,4,"chest[facing=north,type=right,waterlogged=false]");
 set(-15,63,4,"red_bed[facing=south,occupied=false,part=foot]");
 set(-15,63,5,"red_bed[facing=south,occupied=false,part=head]");
 set(-4,63,-3,"oak_sign[rotation=4,waterlogged=false]");
@@ -91,6 +91,15 @@ function encodeChunks(sceneBlocks) {
 const spawnBlocks = new Map([...blocks].map(([position,block]) => [position,block.replace("minecraft:spruce_stairs[","minecraft:brick_stairs[").replace("minecraft:spruce_slab[","minecraft:brick_slab[")]));
 const sceneChunks = new Map([["village",encodeChunks(blocks)],["spawn",encodeChunks(spawnBlocks)]]);
 const scene={id:"village",name:"Деревня · тестовая сцена",kind:"settlement",world:"fixture",bounds:{minX:-24,maxX:24,minY:56,maxY:88,minZ:-24,maxZ:24},camera:{target:[0,64,0],azimuthDegrees:42,elevationDegrees:35.264,spanBlocks:58},status:"available"};
+const inspectionCameras = [
+  ["actors","Модели и движение",[8,64,18.5],25,17,18],
+  ["chests_front","Сундуки · спереди",[8,63.6,4.5],205,9],
+  ["chests_back","Сундуки · сзади",[8,63.6,4.5],285,6,75],
+  ["bed","Кровать",[-14.5,63.5,5],135,7],
+  ["corner","Угол забора",[5.5,63.5,-6],220,7],
+  ["wall","Стена",[10,65,7],220,9]
+];
+const locations=[scene,{...scene,id:"spawn",name:"Спавн · тестовая сцена",kind:"spawn",camera:{...scene.camera,azimuthDegrees:135}},...inspectionCameras.map(([id,name,target,azimuthDegrees,spanBlocks,elevationDegrees=35.264])=>({...scene,id,name:name+" · тестовая сцена",kind:"inspection",camera:{target,azimuthDegrees,spanBlocks,elevationDegrees}}))];
 const start=Date.now();
 const files=new Map();
 const display=(id,name,position,content)=>({ id,kind:"display",type:`${content.kind}_display`,name,position,yawDegrees:0,headYawDegrees:0,pitchDegrees:0,scale:1,display:{ translation:[0,0,0],scale:[1,1,1],leftRotation:[0,0,0,1],rightRotation:[0,0,0,1],billboard:"FIXED",...content } });
@@ -111,15 +120,25 @@ const server=http.createServer((request,response)=>{
     const file=path.resolve(websiteRoot,url.pathname.startsWith("/world")?"world/index.html":url.pathname.slice(1));
     if(file.startsWith(websiteRoot+path.sep)&&fs.existsSync(file)) return send(response,fs.readFileSync(file),({".html":"text/html; charset=utf-8",".js":"application/javascript",".css":"text/css",".png":"image/png",".woff2":"font/woff2"})[path.extname(file)]??"application/octet-stream");
   }
-  if(url.pathname==="/v1/scenes")return send(response,{schemaVersion:1,minecraftVersion:"1.21.11",assetRevision:revision,assetsUrl:`assets/${revision}/manifest.json`,scenes:[scene,{...scene,id:"spawn",name:"Спавн · тестовая сцена",kind:"spawn",camera:{...scene.camera,azimuthDegrees:135}}]});
-  if(/^\/v1\/scenes\/(village|spawn)\/frame$/.test(url.pathname)) {
-    const sceneId=url.pathname.split('/')[3],chunks=sceneChunks.get(sceneId);
+  if(url.pathname==="/v1/scenes")return send(response,{schemaVersion:1,minecraftVersion:"1.21.11",assetRevision:revision,assetsUrl:`assets/${revision}/manifest.json`,scenes:locations});
+  if(/^\/v1\/scenes\/[a-z_]+\/frame$/.test(url.pathname) && locations.some(location=>location.id===url.pathname.split('/')[3])) {
+    const sceneId=url.pathname.split('/')[3],chunks=sceneChunks.get(sceneId)??sceneChunks.get("village");
     const t=(Date.now()-start)/1000;
-    const walk=(id,kind,type,name,x,z,phase=0)=>({id,kind,type,name,position:[x+Math.sin(t*.45+phase)*4,63,z+Math.cos(t*.45+phase)*2],yawDegrees:-(t*.45+phase)*180/Math.PI,headYawDegrees:-(t*.45+phase)*180/Math.PI,pitchDegrees:0,pose:"STANDING",scale:1,seated:false,skin:type==="player"?{url:`assets/${revision}/native/assets/minecraft/textures/entity/player/wide/steve.png`,model:"default"}:null,equipment:{}});
-    return send(response,{sceneId,epoch:"fixture-2",seq:Math.floor(t*5),capturedAt:Date.now(),reset:!url.searchParams.has("after"),loadedChunks:chunks.size,totalChunks:chunks.size,entities:[{...walk("player:1","player","player","Игрок",-5,0),equipment:[{slot:"HAND",material:"minecraft:iron_axe",amount:1},{slot:"HEAD",material:"minecraft:iron_helmet",amount:1}]},walk("npc:1","npc","player","Житель",6,0,2),walk("cow:1","mob","cow","Корова",-6,-7,1),walk("sheep:1","mob","sheep","Овца",-9,-6,3),walk("pig:1","mob","pig","Свинья",13,18,2),...displays],chunks:[...chunks.values()].map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
+    const inspecting=sceneId==="actors",motionTime=inspecting?Math.floor(t/16)*10+Math.min(t%16,10):t;
+    const walk=(id,kind,type,name,x,z,phase=0)=>{
+      const angle=motionTime*(inspecting ? .9 : .45)+phase,rx=inspecting ? 1 : 4,rz=inspecting ? .25 : 2;
+      const yaw=Math.atan2(-Math.cos(angle)*rx,-Math.sin(angle)*rz)*180/Math.PI;
+      return {id,kind,type,name,position:[x+Math.sin(angle)*rx,63,z+Math.cos(angle)*rz],yawDegrees:yaw,headYawDegrees:yaw,pitchDegrees:0,pose:"STANDING",scale:1,seated:false,skin:type==="player"?{url:`assets/${revision}/native/assets/minecraft/textures/entity/player/wide/steve.png`,model:"default"}:null,equipment:{}};
+    };
+    const equipment=[{slot:"HAND",material:"minecraft:iron_axe",amount:1},...(["HEAD","CHEST","LEGS","FEET"].map((slot,index)=>({slot,material:`minecraft:iron_${["helmet","chestplate","leggings","boots"][index]}`,amount:1})))];
+    const entities=inspecting?[
+      walk("cow:1","mob","cow","Корова",3,16),walk("sheep:1","mob","sheep","Овца",6,16),walk("pig:1","mob","pig","Свинья",9,16),walk("chicken:1","mob","chicken","Курица",12,16),
+      walk("horse:1","mob","horse","Лошадь",4,21),walk("zombie:1","mob","zombie","Зомби",8,21),{...walk("player:1","player","player","Игрок в броне",12,21),equipment}
+    ]:[{...walk("player:1","player","player","Игрок",-5,0),equipment:equipment.slice(0,2)},walk("npc:1","npc","player","Житель",6,0,2),walk("cow:1","mob","cow","Корова",-6,-7,1),walk("sheep:1","mob","sheep","Овца",-9,-6,3),walk("pig:1","mob","pig","Свинья",13,18,2)];
+    return send(response,{sceneId,epoch:"fixture-2",seq:Math.floor(t*5),capturedAt:Date.now(),reset:!url.searchParams.has("after"),loadedChunks:chunks.size,totalChunks:chunks.size,entities:[...entities,...displays],chunks:[...chunks.values()].map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
   }
-  const chunkMatch=url.pathname.match(/^\/v1\/scenes\/(village|spawn)\/chunks\/(-?\d+)\/(-?\d+)\/1\.json$/);
-  const chunk=chunkMatch&&sceneChunks.get(chunkMatch[1]).get(`${chunkMatch[2]},${chunkMatch[3]}`);
+  const chunkMatch=url.pathname.match(/^\/v1\/scenes\/([a-z_]+)\/chunks\/(-?\d+)\/(-?\d+)\/1\.json$/);
+  const chunk=chunkMatch&&locations.some(location=>location.id===chunkMatch[1])&&(sceneChunks.get(chunkMatch[1])??sceneChunks.get("village")).get(`${chunkMatch[2]},${chunkMatch[3]}`);
   if(chunk)return send(response,chunk);
   const prefix=url.pathname.startsWith("/assets/")?assetsRoot:path.join(root,"dist");
   const relative=url.pathname.startsWith("/assets/")?url.pathname.slice(8):url.pathname==="/"?"index.html":url.pathname.slice(1);

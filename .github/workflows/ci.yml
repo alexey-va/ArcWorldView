@@ -20,18 +20,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Read pinned renderer source
-        id: renderer
-        run: |
-          ref=$(cat renderer-source.ref)
-          [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: alexey-va/ruscrafting-ops
-          ref: ${{ steps.renderer.outputs.ref }}
-          path: build-inputs/ops
-          persist-credentials: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -43,8 +31,6 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Build browser and run protocol checks
         working-directory: web
-        env:
-          ARC_VIEWER_ROOT: ${{ github.workspace }}/build-inputs/ops/scripts/player-bot
         run: |
           npm ci
           npm run build

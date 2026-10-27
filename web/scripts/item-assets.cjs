@@ -14,9 +14,8 @@ function files(directory, prefix = "") {
 }
 
 function compileItemAssets({ viewerRoot, output }) {
-  // Use the same model inheritance, texture aliases and ItemsAdder CMD resolver
-  // as the owned player-bot renderer. This dependency is build-time only.
-  const { resolveResourceItemRenderModel, resolveItemsAdderRenderModel } = require(path.join(viewerRoot, "src/enhanced-viewer.cjs"));
+  // The pinned public subset resolves only the explicit captured resource pack.
+  const { resolveResourceItemRenderModel, resolveItemsAdderRenderModel } = require(path.join(viewerRoot, "src/item-model-assets.cjs"));
   const nativeRoot = path.join(output, "native");
   const modelRoot = path.join(output, "models");
   fs.mkdirSync(modelRoot, { recursive: true });

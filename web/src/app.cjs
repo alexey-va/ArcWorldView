@@ -6,9 +6,12 @@ const { WorldRenderer } = require("prismarine-viewer/viewer/lib/worldrenderer");
 const { MapControls } = require("prismarine-viewer/viewer/lib/controls");
 const Entity = require("prismarine-viewer/viewer/lib/entity/Entity");
 const entityModels = require("prismarine-viewer/viewer/lib/entity/entities.json");
+const { installNativeEntityModels, nativeEntityCompatibility } = require("./native-entity-models.cjs");
+const { prepareMobSkeletons, poseMobSkeletons } = require("./mob-pose.cjs");
+installNativeEntityModels(entityModels);
 const { configureMinecraftRenderer, configureMinecraftTexture } = require("@viewer/viewer-color");
 const { playerBodyMesh, playerBones, normalizePlayerSkeleton, applyPlayerGeometry } = require("@viewer/player-model");
-const { actorBoneRotations, localBonePivots, offsetBoneRotation } = require("@viewer/actor-pose");
+const { actorBoneRotations, offsetBoneRotation } = require("@viewer/actor-pose");
 const { normalizePlayerSkinImage } = require("@viewer/player-skin");
 const { setAssets, assetUrl } = require("./viewer-utils.cjs");
 const { sampleActor } = require("./actor-motion.cjs");
@@ -268,7 +271,7 @@ async function loadSkin(actor, record) {
 function createActor(record) {
   if(record.kind==="display" && record.display) return displayActor(record);
   const type = String(record.type).replace(/^minecraft:/, "").toLowerCase();
-  if (!assets.supportedEntities.includes(type)) return null;
+  if (!assets.supportedEntities.includes(type) || nativeEntityCompatibility(type, entityModels[type])) return null;
   const mesh = new Entity(catalog.minecraftVersion, type, scene).mesh;
   mesh.userData.actorId = record.id;
   const actor = { mesh, type, record, phase: 0, bodies: [] };
@@ -279,22 +282,7 @@ function createActor(record) {
     actor.bones = playerBones(actor.body);
     actor.base = Object.fromEntries(Object.entries(actor.bones).map(([name, bone]) => [name, { x: bone.rotation.x, y: bone.rotation.y, z: bone.rotation.z }]));
   } else {
-    let partIndex = 0;
-    const definitions = Object.values(entityModels[type].geometry).filter((_, index) => Object.values(entityModels[type].textures)[index]);
-    mesh.traverse((part) => {
-      if (!part.isSkinnedMesh) return;
-      const definitionsForPart = definitions[partIndex++]?.bones ?? [];
-      const pivots = localBonePivots(definitionsForPart);
-      const bones = {};
-      for (const [index, definition] of definitionsForPart.entries()) {
-        const bone = part.skeleton.bones[index];
-        if (!bone) continue;
-        bone.position.set(...pivots[definition.name.toLowerCase()]);
-        bones[definition.name.toLowerCase()] = bone;
-      }
-      part.updateMatrixWorld(true); part.bind(part.skeleton);
-      actor.bodies.push({ mesh: part, bones, base: Object.fromEntries(Object.entries(bones).map(([name, bone]) => [name, { x: bone.rotation.x, y: bone.rotation.y, z: bone.rotation.z }])) });
-    });
+    actor.bodies = prepareMobSkeletons(mesh, entityModels[type], type);
   }
   mesh.position.set(...record.position);
   scene.add(mesh);
@@ -371,10 +359,7 @@ function applyActorPose(actor, value, delta) {
     }
     if (actor.bones.head) { actor.bones.head.rotation.y = actor.base.head.y - THREE.MathUtils.degToRad(value.headYawDegrees - value.yawDegrees); actor.bones.head.rotation.x = actor.base.head.x - THREE.MathUtils.degToRad(value.pitchDegrees); }
   } else {
-    for (const body of actor.bodies) {
-      const legs = Object.keys(body.bones).filter((name) => /leg|arm/.test(name));
-      for (const [index, name] of legs.entries()) body.bones[name].rotation.x = body.base[name].x + walk * ([0, 3].includes(index % 4) ? 1 : -1);
-    }
+    poseMobSkeletons(actor.bodies, walk, THREE.MathUtils.degToRad(value.headYawDegrees - value.yawDegrees), THREE.MathUtils.degToRad(value.pitchDegrees));
   }
 }
 

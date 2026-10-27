@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "alexey-va/ruscrafting-ops",
+  "upstream_commit": "f4e4e5a69fafacbc2750b1256ef3c8087963ad1c",
+  "source_root": "scripts/player-bot",
+  "files": [
+    {
+      "source_path": "scripts/player-bot/src/viewer-color.cjs",
+      "destination_path": "src/viewer-color.cjs",
+      "source_sha256": "743e70f8ec7f2f674677bbbf3e4e420fc6b27afb211e2a3bbac0264d13f932b3",
+      "copied_sha256": "743e70f8ec7f2f674677bbbf3e4e420fc6b27afb211e2a3bbac0264d13f932b3",
+      "bytes": 609
+    },
+    {
+      "source_path": "scripts/player-bot/src/actor-pose.cjs",
+      "destination_path": "src/actor-pose.cjs",
+      "source_sha256": "0dd84e0cdcbe3be94bddd4f726f77f8cab1d288166628d6cdc48bafea25bfd47",
+      "copied_sha256": "0dd84e0cdcbe3be94bddd4f726f77f8cab1d288166628d6cdc48bafea25bfd47",
+      "bytes": 1585
+    },
+    {
+      "source_path": "scripts/player-bot/src/player-model.cjs",
+      "destination_path": "src/player-model.cjs",
+      "source_sha256": "63ae83f4db8b5dfc3107bd8dd4c727efce25be5436298b6cf755344a4303b5c9",
+      "copied_sha256": "63ae83f4db8b5dfc3107bd8dd4c727efce25be5436298b6cf755344a4303b5c9",
+      "bytes": 4765
+    },
+    {
+      "source_path": "scripts/player-bot/src/player-skin.cjs",
+      "destination_path": "src/player-skin.cjs",
+      "source_sha256": "da03a29df900b7fcc7ad59a50a08e8dcb94bf4060546463538b3bf4af692ce7e",
+      "copied_sha256": "da03a29df900b7fcc7ad59a50a08e8dcb94bf4060546463538b3bf4af692ce7e",
+      "bytes": 2703
+    },
+    {
+      "source_path": "scripts/player-bot/src/item-model-geometry.cjs",
+      "destination_path": "src/item-model-geometry.cjs",
+      "source_sha256": "103cb2b52bb99dd5b7023368836a5d3a57851e8d2d5495d6685efbd651b69ec8",
+      "copied_sha256": "103cb2b52bb99dd5b7023368836a5d3a57851e8d2d5495d6685efbd651b69ec8",
+      "bytes": 5860
+    },
+    {
+      "source_path": "scripts/player-bot/src/viewer-models-patch.cjs",
+      "destination_path": "src/viewer-models-patch.cjs",
+      "source_sha256": "8355c0a5b51baa820217ad088ff850e70f2201d305ba3894e7e7975c9ac719f4",
+      "copied_sha256": "8355c0a5b51baa820217ad088ff850e70f2201d305ba3894e7e7975c9ac719f4",
+      "bytes": 515
+    },
+    {
+      "source_path": "scripts/player-bot/src/resource-pack-block-assets.cjs",
+      "destination_path": "src/resource-pack-block-assets.cjs",
+      "source_sha256": "0dce9b237d307ec0144377f0a8951caea4845d4f0d558b53fc6273d8f9749d17",
+      "copied_sha256": "0dce9b237d307ec0144377f0a8951caea4845d4f0d558b53fc6273d8f9749d17",
+      "bytes": 6636
+    },
+    {
+      "source_path": "scripts/player-bot/scripts/generate-viewer-assets.cjs",
+      "destination_path": "scripts/generate-viewer-assets.cjs",
+      "source_sha256": "a581297ce4fab816ce29ca96a4a53d9266ea8656b89ddba0a5b039e2495da812",
+      "copied_sha256": "a581297ce4fab816ce29ca96a4a53d9266ea8656b89ddba0a5b039e2495da812",
+      "bytes": 8730
+    },
+    {
+      "source_path": "scripts/player-bot/scripts/build-font-glyphs.py",
+      "destination_path": "scripts/build-font-glyphs.py",
+      "source_sha256": "92bf43ef18e0a8dd631044bab81fe857c841bbea291554ff513d6d08cb3620f4",
+      "copied_sha256": "92bf43ef18e0a8dd631044bab81fe857c841bbea291554ff513d6d08cb3620f4",
+      "bytes": 5835
+    }
+  ]
+}

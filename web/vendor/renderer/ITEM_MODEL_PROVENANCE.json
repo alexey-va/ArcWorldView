@@ -1,0 +1,21 @@
+{
+  "upstreamCommit": "f4e4e5a69fafacbc2750b1256ef3c8087963ad1c",
+  "sourcePath": "scripts/player-bot/src/enhanced-viewer.cjs",
+  "sourceSha256": "2b33d5c625ad42c3f5bc955149c57dbffcca04430e279fded00379e043d22da6",
+  "unchangedFunctions": {
+    "safeRelativeAssetPath": "705bd41869c09d699d693962bcaddd94fddd7bd3a044a265458e309970e8e2ea",
+    "modelReference": "3152cfb8df5e6054ee7dcf0963183162b7276d56011f852d7c91543bed23262d",
+    "customModelDataItemReference": "2e6999e772e9f1c2ddab046a7d6e5ccb7ce79c4bc4701e3f7105b170f1b98fff",
+    "resourceLocation": "3eb9c69729c30db02f449870480bdbc1f1342e09f188b7a639afc5de8ec9661c",
+    "packFile": "a2673087542ca2f9ebd3a2f2f5f4658d52dd8873b199673b5307a16e284e5396",
+    "mergeModel": "d09cbe4520e688888a5986ab7313d4ea0676bdd4e756602253a8cf2fb089d203",
+    "compiledAtlasResources": "d3dd277463f7fbed151593d247a158bbc415c13be092bcddc1f54dff543b0367",
+    "resolveTextureReference": "94a638806e0fc19688492e18162ce93227783c0a22ef8f0946c8e5f1067ebe68",
+    "resolveResourceItemModelReference": "dccd97c62dcae08084d4a08ad22bb198480669e3162df75d60c40928055b5eb7",
+    "resolveResourceItemRenderModel": "de5e36d5bbefd1e9e957c8a54789c11af7564fbf7a2a740a2ab96a3fa88ec45e"
+  },
+  "adaptations": [
+    "modelFile resolves only the explicit captured resource pack",
+    "ItemsAdder CMD resolver has no runtime server configuration fallback"
+  ]
+}

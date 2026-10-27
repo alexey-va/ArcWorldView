@@ -38,11 +38,11 @@ HTTP слушает **127.0.0.1:25912**. Внешняя публикация и�
 
 ## Сборка
 
-Зависимости Core разрешаются из публичного Maven RusCrafting. Для браузера
-используется закреплённый исходный renderer из `ruscrafting-ops`:
+Зависимости Core разрешаются из публичного Maven RusCrafting. Нужные общие
+renderer helpers входят в исходники с закреплённой ревизией и хэшами;
+доступ к закрытому репозиторию операций для сборки не требуется:
 
 ```sh
-export ARC_VIEWER_ROOT=/absolute/path/to/ruscrafting-ops/scripts/player-bot
 cd web
 npm ci
 npm run build

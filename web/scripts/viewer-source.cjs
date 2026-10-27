@@ -4,11 +4,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 function viewerSource() {
-  const root = process.env.ARC_VIEWER_ROOT;
-  if (!root) throw new Error("Set ARC_VIEWER_ROOT to the pinned ops checkout's scripts/player-bot directory");
-  const resolved = path.resolve(root);
+  const resolved = path.resolve(__dirname, "../vendor/renderer");
+  const pin = fs.readFileSync(path.resolve(__dirname, "../../renderer-source.ref"), "utf8").trim();
+  const provenance = JSON.parse(fs.readFileSync(path.join(resolved, "PROVENANCE.json"), "utf8"));
+  if (provenance.upstream_commit !== pin) throw Error("Bundled renderer source does not match its pinned revision");
   if (!fs.existsSync(path.join(resolved, "scripts", "generate-viewer-assets.cjs"))) {
-    throw new Error("ARC_VIEWER_ROOT is not a player-bot source directory");
+    throw new Error("Bundled renderer source is missing");
   }
   return resolved;
 }

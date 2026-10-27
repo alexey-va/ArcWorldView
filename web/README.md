@@ -7,13 +7,13 @@ catalog's asset manifest. There is no Minecraft login or Mineflayer session.
 
 ## Build
 
-Use Node 24 and the exact renderer source checkout pinned by
-`../renderer-source.ref`. `ARC_VIEWER_ROOT` must point to its
-`scripts/player-bot` directory, not to the repository root.
+Use Node 24. The required project-owned renderer helpers are bundled in
+`vendor/renderer`, with source provenance pinned by `../renderer-source.ref`.
+The public build uses these checked inputs directly and needs no credentials
+or operations-repository checkout.
 
 ```sh
 npm ci
-export ARC_VIEWER_ROOT=/path/to/pinned-ruscrafting-ops/scripts/player-bot
 npm run build
 npm test
 ```
@@ -78,7 +78,8 @@ new bounds and asset revisions. Hidden tabs stop polling/rendering.
 ## Model coverage
 
 Terrain uses the selected Minecraft block states and server-pack models, with
-the stock renderer's 16 px atlas. Ordinary structures, stairs, foliage and IA
+16 px sprites surrounded by repeated edge texels in the generated atlas. This
+keeps antialiased polygon edges from sampling an adjacent sprite. Ordinary structures, stairs, foliage and IA
 block geometry are data driven. Supplemental closed chest models (single,
 double, trapped and ender), all bed colours, and standing/wall signs use native
 client part dimensions and original entity texture regions. The current
@@ -87,12 +88,19 @@ snapshot does not carry chest lid animation or sign text.
 Players/NPCs use native skins, slim/default arms and outer layers; ordinary
 humanoid armour, held items and head items follow the skeleton. Supported mobs
 use real skeletons/textures, with locomotion driven by observed movement.
+The adapter preserves baked rest geometry, uses each native joint once, and
+moves complete limb chains. Java 1.21.11 UV layouts and the current horse model
+are explicit compatibility data; texture image dimensions do not define the UV
+space, so HD textures keep their intended normalized coordinates. See
+[MODEL_COMPATIBILITY.md](MODEL_COMPATIBILITY.md) for the pinned source evidence
+and regression boundary. This is a bounded walking pose, not the complete
+Minecraft animation state machine.
 ItemDisplay supports native model/CMD/context and display transforms;
 BlockDisplay uses the same worker mesher as terrain; plain TextDisplay uses
 native bitmap glyphs. Unsupported models are omitted with a visible coverage
 notice, never replaced by coloured cubes.
 
-`coverage.json` lists remaining special item renderers and blocks outside the
+`coverage.json` lists remaining special item renderers, entity incompatibilities and blocks outside the
 stock/supplemental renderer. Examples include banners, shulker boxes, hanging
 signs and animated compass/clock item renderers. Newer mob types outside the
 bundled skeleton set are also explicit missing coverage. Biome tint currently
@@ -115,6 +123,10 @@ and chest/bed/sign examples. Its second location has brick roofs, making stale
 terrain after a scene switch observable. It sends the production CSP and nosniff
 headers. It is never bundled into the plugin. The fixture captures its asset
 revision on startup; restart it after asset regeneration.
+Inspection locations provide close views of animals, full player armour,
+chests, a bed, a fence corner and a wall. The animal row alternates ten seconds
+of movement and six seconds at rest, so the transition can be checked as well
+as a still pose.
 
 A fixture render verifies the browser and model pipeline. It does not prove
 production capture, main-thread load, live ArcCivs visibility or nginx delivery.
