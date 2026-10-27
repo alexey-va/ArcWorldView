@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arcworldview-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Read pinned renderer source
+        id: renderer
+        run: |
+          ref=$(cat renderer-source.ref)
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: alexey-va/ruscrafting-ops
+          ref: ${{ steps.renderer.outputs.ref }}
+          path: build-inputs/ops
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build browser and run protocol checks
+        working-directory: web
+        env:
+          ARC_VIEWER_ROOT: ${{ github.workspace }}/build-inputs/ops/scripts/player-bot
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: Verify arc-core consumer architecture
+        uses: alexey-va/arc-core/.github/actions/verify-consumer@d7692a360f3434547146933329758cff1ed74de5
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+      - name: Unit checks and production JAR
+        run: ./gradlew --no-daemon --build-cache test shadowJar
+      - name: Verify production artifact and host linkage
+        id: artifact
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 scripts/verify-jar.py --arc-core-jar build/verification/ArcCore.jar --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ArcWorldView-${{ github.sha }}
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error

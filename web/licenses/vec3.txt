@@ -1,0 +1,8 @@
+vec3 0.1.10
+Author: Andrew Kelley; maintained by PrismarineJS contributors.
+Source: https://github.com/PrismarineJS/node-vec3
+
+The published package.json declares "license": "BSD". Neither this pinned npm
+package nor its upstream repository provides a separate license text or a
+specific BSD variant. This notice preserves the upstream declaration and
+attribution; it does not assign a different license or invent copyright dates.

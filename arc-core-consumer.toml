@@ -1,0 +1,4 @@
+schema = 1
+platform = "paper"
+core_version = "2.7.71"
+capabilities = ["health", "localized-text", "logging", "paper-testing", "runtime", "scheduling"]

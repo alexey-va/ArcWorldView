@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#0b0f0e" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%237d9c78' d='m16 2 13 7v14l-13 7-13-7V9z'/%3E%3Cpath fill='%234e6a4e' d='m16 16 13-7v14l-13 7z'/%3E%3C/svg%3E" />
+    <title>Живой мир — RusCrafting</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="world-view" aria-label="Живой мир RusCrafting">
+      <header class="world-toolbar">
+        <div class="location-control">
+          <label for="scene">Локация</label>
+          <select id="scene" aria-label="Выбрать локацию" disabled><option>Загружаем локации…</option></select>
+        </div>
+        <div class="connection" role="status" aria-live="polite"><span id="connection-dot"></span><span id="connection-text">Подключаемся</span></div>
+        <div class="view-modes" aria-label="Ракурс камеры">
+          <button id="isometric" type="button" aria-pressed="true">Изометрия</button>
+          <button id="top-view" type="button" aria-pressed="false">Сверху</button>
+        </div>
+        <button class="icon-button" id="reset-view" type="button" aria-label="Показать всю локацию" title="Показать всю локацию"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M8 12l4-4 4 4-4 4Z"/></svg></button>
+        <button class="icon-button" id="fullscreen" type="button" aria-label="На весь экран" title="На весь экран"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+      </header>
+      <section class="viewport" id="viewport" aria-label="Объёмная сцена выбранной локации">
+        <div id="canvas-host"></div>
+        <div class="scene-message" id="scene-message" role="status">
+          <span class="scene-message__line" aria-hidden="true"></span>
+          <h1 id="message-title">Открываем мир</h1>
+          <p id="message-detail">Загружаем модели и текстуры Minecraft.</p>
+          <button id="retry" type="button" hidden>Повторить</button>
+        </div>
+        <div class="scene-caption" id="scene-caption" hidden><strong id="scene-name"></strong><span id="coverage"></span></div>
+        <div class="zoom-controls" aria-label="Масштаб"><button id="zoom-in" type="button" aria-label="Приблизить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button><button id="zoom-out" type="button" aria-label="Отдалить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button></div>
+        <aside class="actor-info" id="actor-info" hidden><strong id="actor-name"></strong><span id="actor-kind"></span></aside>
+        <p class="controls-hint"><span class="desktop-hint">Мышь — поворот · правая кнопка — перемещение · колесо — масштаб</span><span class="touch-hint">Один палец — поворот · два — перемещение и масштаб</span></p>
+        <p class="scene-notice" id="scene-notice" hidden></p>
+      </section>
+    </main>
+    <script src="app.js" defer></script>
+  </body>
+</html>

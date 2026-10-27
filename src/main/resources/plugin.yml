@@ -1,0 +1,14 @@
+name: ArcWorldView
+version: '${version}'
+main: ru.arc.worldview.ArcWorldViewPlugin
+api-version: '1.21.11'
+authors: [RusCrafting]
+description: Read-only live browser views of selected world locations
+depend: [ArcCore]
+commands:
+  worldview:
+    description: Inspect live browser viewer readiness
+    permission: arcworldview.admin
+permissions:
+  arcworldview.admin:
+    default: op

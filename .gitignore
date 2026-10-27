@@ -1,0 +1,13 @@
+.gradle/
+build/
+.idea/
+*.iml
+.env
+web/node_modules/
+web/dist/
+.assets/
+.cache/
+artifacts/
+local.properties
+build-inputs/
+scripts/__pycache__/

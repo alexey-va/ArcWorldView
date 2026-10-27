@@ -1,0 +1,29 @@
+# This listener is private. Publish only through the managed TLS reverse proxy.
+http:
+  bind: 127.0.0.1
+  port: 25912
+assets-root: assets
+asset-revision: current
+public-url: https://rus-crafting.ru/world
+capture:
+  tick-budget-ms: 1.5
+  chunks-per-tick: 1
+  entity-samples-per-tick: 96
+  entity-limit: 512
+  active-scenes: 2
+  max-radius: 128
+  min-y: 0
+  max-y: 160
+  idle-seconds: 15
+  refresh-seconds: 30
+  chunk-cache-mib: 64
+  worker-threads: 2
+  worker-queue: 8
+locations:
+  spawn:
+    name: Спавн
+    kind: spawn
+    world: spawn
+    center: [0, 70, 0]
+    radius: 80
+discover-settlements: true
