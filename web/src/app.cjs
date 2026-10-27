@@ -17,6 +17,7 @@ const { setAssets, assetUrl } = require("./viewer-utils.cjs");
 const { sampleActor } = require("./actor-motion.cjs");
 const { configureModels,itemMesh,blockMesh,textMesh,armorParts } = require("./model-renderer.cjs");
 const { playerHandBone, playerHandGripMatrix, heldItemArmRotation } = require("./native-item-geometry.cjs");
+const { createAtmosphere } = require("./atmosphere.cjs");
 
 const $ = (id) => document.getElementById(id);
 const viewport = $("viewport");
@@ -26,7 +27,7 @@ const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matc
 const actors = new Map(), loadedChunks = new Map(), pendingChunks = new Map(), decodeRequests = new Map(), skinTextures = new Map(), chunkControllers = new Set();
 const terrainWarnings=new Map();
 const history = [];
-let assets, catalog, selectedScene, renderer, scene, camera, controls, terrain, terrainRoot, decoder;
+let assets, catalog, selectedScene, renderer, scene, camera, controls, terrain, terrainRoot, decoder, atmosphere;
 let generation = 0, epoch = null, sequence = -1, lastFrameAt = 0, lastLoopAt = 0, chunkRequestId = 0, loadedCount = 0, totalCount = 0;
 let cameraMode = "isometric", selectedActor = null, pollController = null, hasGeometry = false, span = 64, failedAssets = false;
 let catalogRefreshing = null;
@@ -82,6 +83,7 @@ function disposeMesh(root) {
 
 function clearWorld() {
   hasGeometry = false;
+  atmosphere?.reset();
   history.length = 0;
   for (const actor of actors.values()) disposeMesh(actor.mesh);
   actors.clear();
@@ -109,6 +111,7 @@ function resize() {
   camera.top = visibleSpan / 2; camera.bottom = -visibleSpan / 2;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
+  atmosphere?.resize(width, height);
 }
 
 function frameScene(mode = cameraMode) {
@@ -143,11 +146,8 @@ function initRenderer() {
   renderer.domElement.setAttribute("aria-label", "3D-сцена. Мышь поворачивает камеру, WASD перемещает её.");
   $("canvas-host").append(renderer.domElement);
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xc9d4cd);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.73));
-  const sunlight = new THREE.DirectionalLight(0xfff4dc, 0.63);
-  sunlight.position.set(-80, 140, 50); scene.add(sunlight);
   camera = new THREE.OrthographicCamera(-40, 40, 30, -30, 0.1, 1800);
+  atmosphere = createAtmosphere({ renderer, scene, camera });
   controls = new MapControls(camera, renderer.domElement);
   controls.enableDamping = !reducedMotion; controls.dampingFactor = 0.16;
   controls.minZoom = 0.35; controls.maxZoom = 8;
@@ -380,6 +380,7 @@ async function fetchChunk(descriptor, expectedGeneration) {
     const decoded = await new Promise((resolve, reject) => { decodeRequests.set(id, { resolve, reject }); decoder.postMessage({ id, chunk, version: catalog.minecraftVersion }); });
     if (expectedGeneration !== generation || expectedEpoch !== epoch || pendingChunks.get(key) !== descriptor.revision) return;
     terrain.addColumn(descriptor.x * 16, descriptor.z * 16, decoded);
+    atmosphere.setChunk(key, chunk);
     terrainWarnings.set(key,chunk.palette.some((block) => assets.unsupportedBlocks?.includes(block.replace(/^minecraft:/,"").split("[")[0])));
     loadedChunks.set(key, descriptor.revision);
     viewport.dataset.chunks = String(loadedChunks.size);
@@ -403,6 +404,7 @@ async function receiveFrame(frame, expectedGeneration) {
   const current = new Set(frame.chunks.map((chunk) => `${chunk.x},${chunk.z}`));
   for (const key of loadedChunks.keys()) if (!current.has(key)) {
     const [x, z] = key.split(",").map(Number); terrain.removeColumn(x * 16, z * 16); loadedChunks.delete(key); terrainWarnings.delete(key);
+    atmosphere.removeChunk(key);
   }
   // Only two new chunks in flight keeps the browser responsive during the first panorama.
   const needed = frame.chunks.filter((chunk) => loadedChunks.get(`${chunk.x},${chunk.z}`) !== chunk.revision && !pendingChunks.has(`${chunk.x},${chunk.z}`));
@@ -441,6 +443,7 @@ function selectScene(id) {
   generation++; pollController?.abort();
   selectedScene = next; sequence = -1; epoch = null; lastFrameAt = 0;
   clearWorld(); terrainRoot.position.y = next.bounds.minY;
+  atmosphere.setBounds(next.bounds);
   $("scene-name").textContent = next.name;
   $("scene-caption").hidden = false;
   $("coverage").textContent = "Загружаем местность";
@@ -513,7 +516,7 @@ function animate(now) {
     hasGeometry = true; $("scene-message").hidden = true; viewport.dataset.state = "ready";
   }
   if (lastFrameAt && now - lastFrameAt > 3000) connection("stale", "Связь прервалась");
-  renderer.render(scene, camera);
+  atmosphere.render(now);
 }
 
 async function start() {
@@ -546,5 +549,6 @@ $("zoom-out").addEventListener("click", () => { if (camera) { camera.zoom = Math
 $("fullscreen").addEventListener("click", async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); } catch { notice("Полный экран недоступен в этом браузере."); } });
 $("retry").addEventListener("click", () => window.location.reload());
 window.addEventListener("worldview-asset-error", () => { failedAssets = true; notice("Часть текстур не загрузилась."); });
+window.addEventListener("pagehide", (event) => { if (!event.persisted) atmosphere?.dispose(); });
 if (window.parent !== window) window.parent.postMessage({ type: "arc-worldview-ready" }, window.location.origin);
 void start();

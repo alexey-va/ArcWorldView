@@ -76,3 +76,37 @@ opaque side sampling, context order, both native grips through a walking cycle,
 and the actual renderer cache across hands and revision changes. The `hands`
 fixture location supplies two armoured players with identical native iron axes
 in opposite hands and the same ten-second walk / six-second rest cycle.
+
+## Browser atmosphere
+
+`atmosphere.cjs` adds warm directional sunlight, cooler hemisphere fill and a
+single PCF soft shadow map to the native Lambert materials. It retains the
+existing linear colour pipeline, nearest-filtered textures and terrain vertex
+occlusion. The map is fitted to the selected scene's world bounds, capped at
+2048² pixels (1024² on small viewports), and refreshed at most 30 times per
+second except when new geometry arrives. Scene geometry is unchanged.
+
+Three 0.128.0 does not copy alpha maps into its default shadow-depth material.
+The owned adapter supplies alpha-test maps, asynchronous skins and skeletal
+deformation explicitly. Unlit text overlays do not cast rectangle shadows.
+Removed meshes release their depth materials; resize reallocates the map only
+when its size changes, and disposal restores renderer state. This path uses
+packed RGBA shadow depth, so it does not require a depth-texture extension.
+Devices with a texture-size limit below 512 retain lighting without shadows.
+Terrain uses a shared alpha-tested material: cutout silhouettes are preserved,
+but translucent water and glass do not produce coloured or transmitted shadows.
+
+At most four lanterns nearest the visible centre receive a small warm or soul
+light and a depth-tested halo. Positions come from the already decoded chunk
+palette/RLE and the native bulb centre; scene reset and chunk removal clear
+them. Source retention is capped at 32 lanterns per chunk. These short-range
+point lights do not allocate additional shadow maps. White armour, text and
+other bright textures never trigger glow.
+
+The visual direction draws on Complementary Reimagined's warm sunlight and
+cooler shadows. No shader-pack code or assets are included. This bounded
+orthographic viewer does not implement its atmospheric rays, sky rendering,
+water reflections or full-screen effects. `test/atmosphere.test.cjs` covers
+frustum fitting, capability/resize bounds, alpha and skeleton depth inputs,
+resource disposal, lantern identity/coordinates and scene reset. Visual
+inspection remains necessary for light balance, surface detail and motion.
