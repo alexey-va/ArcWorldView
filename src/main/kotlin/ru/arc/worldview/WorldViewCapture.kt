@@ -346,9 +346,11 @@ class WorldViewCapture(
             val world = owner.worldId ?: continue
             val definition = owner.published.definition
             val b = owner.published.captureBounds(now)
-            val observed = observer.entities(ArcSceneBounds(world, b.minX.toDouble(), b.minY.toDouble(), b.minZ.toDouble(),
-                b.maxX.toDouble(), b.maxY.toDouble(), b.maxZ.toDouble()), settings.entityLimit).map(ActorWire::observed)
-            val actors = (observed + nativeActors.values.asSequence().filter { it.worldId == world && now - it.at <= 2_000 }
+            val bounds = ArcSceneBounds(world, b.minX.toDouble(), b.minY.toDouble(), b.minZ.toDouble(),
+                b.maxX.toDouble(), b.maxY.toDouble(), b.maxZ.toDouble())
+            val observed = observer.entities(bounds, settings.entityLimit).map(ActorWire::observed)
+            val displays = observer.displays(bounds, min(settings.entityLimit, 128)).map(ActorWire::observedDisplay)
+            val actors = (observed + displays + nativeActors.values.asSequence().filter { it.worldId == world && now - it.at <= 2_000 }
                 .mapNotNull { it.captured }.filter { b.contains(it.position[0], it.position[1], it.position[2]) }.toList())
                 .distinctBy { it.id }.take(settings.entityLimit)
             for (actor in observed) {

@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "ru.ruscrafting"
-version = "0.1.3"
+version = "0.1.4"
 description = "Live read-only browser views of selected Minecraft locations"
 
 repositories {
@@ -18,17 +18,17 @@ kotlin { jvmToolchain(25) }
 
 dependencies {
     implementation(kotlin("stdlib"))
-    implementation("ru.ruscrafting.arc:arc-core:2.7.72")
-    implementation("ru.ruscrafting.arc:arc-core-logging:2.7.72")
-    implementation("ru.ruscrafting.arc:arc-core-paper:2.7.72")
-    compileOnly("ru.ruscrafting.arc:arc-core-paper-api:2.7.72")
+    implementation("ru.ruscrafting.arc:arc-core:2.7.74")
+    implementation("ru.ruscrafting.arc:arc-core-logging:2.7.74")
+    implementation("ru.ruscrafting.arc:arc-core-paper:2.7.74")
+    compileOnly("ru.ruscrafting.arc:arc-core-paper-api:2.7.74")
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     implementation("com.google.code.gson:gson:2.13.2")
     testImplementation("io.kotest:kotest-runner-junit5:6.0.7")
     testImplementation("io.kotest:kotest-assertions-core:6.0.7")
     testImplementation("io.mockk:mockk:1.14.7")
-    testImplementation("ru.ruscrafting.arc:arc-core-paper-testing:2.7.72")
-    testImplementation("ru.ruscrafting.arc:arc-core-paper-api:2.7.72")
+    testImplementation("ru.ruscrafting.arc:arc-core-paper-testing:2.7.74")
+    testImplementation("ru.ruscrafting.arc:arc-core-paper-api:2.7.74")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -49,7 +49,7 @@ tasks.processResources {
 }
 tasks.jar { archiveClassifier.set("plain") }
 val verificationHost = configurations.detachedConfiguration(
-    dependencies.create("ru.ruscrafting:ArcCore:0.1.23"),
+    dependencies.create("ru.ruscrafting:ArcCore:0.1.25"),
 ).apply { isTransitive = false }
 val prepareHostArtifact by tasks.registering(Copy::class) {
     from({ verificationHost.singleFile }) { rename { "ArcCore.jar" } }

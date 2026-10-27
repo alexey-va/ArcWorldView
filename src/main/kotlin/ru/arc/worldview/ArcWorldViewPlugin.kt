@@ -11,6 +11,7 @@ import ru.arc.logging.paper.PaperLoggingPlatform
 import ru.arc.observability.RuntimeHealthContribution
 import ru.arc.observability.RuntimeHealthState
 import ru.arc.paper.api.ArcSceneObservationService
+import ru.arc.paper.api.ArcSceneDisplay
 import ru.arc.paper.api.ArcSceneEntityInfoService
 import ru.arc.paper.runtime.PaperPluginHotload
 import ru.arc.paper.runtime.PaperPluginRuntime
@@ -48,6 +49,9 @@ class ArcWorldViewPlugin : JavaPlugin() {
         }
         lifecycle.reportHealthEvery(1200L)
         try {
+            check(ArcSceneDisplay::class.java.classLoader === ArcSceneObservationService::class.java.classLoader) {
+                "ArcCore 0.1.25 must own the public display API; activate the coordinated host update first"
+            }
             saveDefaultConfig()
             val settings = WorldViewSettings.load(config, dataPath)
             val observer = requireNotNull(server.servicesManager.load(ArcSceneObservationService::class.java)) { "ArcCore 0.1.22 scene observer is required" }

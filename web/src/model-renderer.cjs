@@ -7,6 +7,7 @@ const { configureMinecraftTexture } = require("@viewer/viewer-color");
 const { assetUrl } = require("./viewer-utils.cjs");
 const { isGeneratedItemFallback, validateSpriteSize, generatedItemFaces, applyNativeItemContext } = require("./native-item-geometry.cjs");
 const { animateTexture, textureSample, frameOffset } = require("./texture-animation.cjs");
+const { renderTextDisplay } = require("./native-text-display.cjs");
 let manifest, decodeBlock;
 const models = new Map(), textures = new Map(), images = new Map(), blocks = new Map(), generatedFaces = new Map();
 const animatedTextures = new Map();
@@ -182,30 +183,18 @@ function loadImage(file) {
   return images.get(file);
 }
 
-async function textMesh(text) {
+async function textMesh(text, style) {
   const font = await loadModel(manifest.font);
-  const lines = String(text ?? "").slice(0,1024).split("\n").slice(0,32);
-  const glyphs = new Map();
-  for (const character of new Set(lines.join(""))) {
-    const glyph = font.glyphs[character.codePointAt(0).toString(16).toUpperCase().padStart(4,"0")];
-    if (!glyph || character === " ") { glyphs.set(character,{ advance:4 }); continue; }
-    const image = await loadImage(glyph.url);
-    const width = image.width / glyph.columns, height = image.height / glyph.rows;
-    const canvas = document.createElement("canvas"); canvas.width=width; canvas.height=height;
-    const context = canvas.getContext("2d"); context.drawImage(image,glyph.column*width,glyph.row*height,width,height,0,0,width,height);
-    const pixels = context.getImageData(0,0,width,height).data;
-    let ink=0; for(let x=0;x<width;x++) for(let y=0;y<height;y++) if(pixels[(y*width+x)*4+3]) ink=Math.max(ink,x+1);
-    glyphs.set(character,{ canvas,height:glyph.height,ascent:glyph.ascent,width:width*glyph.height/height,advance:Math.ceil(ink*glyph.height/height)+1 });
-  }
-  const lineWidths = lines.map((line) => [...line].reduce((sum,character) => sum+glyphs.get(character).advance,0));
-  const canvas = document.createElement("canvas"); canvas.width=Math.max(1,...lineWidths)+4; canvas.height=lines.length*10+4;
-  const context = canvas.getContext("2d"); context.imageSmoothingEnabled=false;
-  context.fillStyle="rgba(0,0,0,.25)"; context.fillRect(0,0,canvas.width,canvas.height);
-  lines.forEach((line,index) => { let x=(canvas.width-lineWidths[index])/2; for(const character of line) { const glyph=glyphs.get(character); if(glyph.canvas) context.drawImage(glyph.canvas,x,2+index*10+7-glyph.ascent,glyph.width,glyph.height); x+=glyph.advance; } });
-  const map = new THREE.CanvasTexture(canvas); map.magFilter=THREE.NearestFilter; map.minFilter=THREE.NearestFilter;
+  const result = await renderTextDisplay(text, style, font, loadImage, (width,height) => {
+    const canvas = document.createElement("canvas"); canvas.width=width; canvas.height=height; return canvas;
+  });
+  if (!result) return new THREE.Group();
+  const map = new THREE.CanvasTexture(result.canvas); map.magFilter=THREE.NearestFilter; map.minFilter=THREE.NearestFilter;
   configureMinecraftTexture(map,THREE);
-  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(canvas.width*.025,canvas.height*.025),new THREE.MeshBasicMaterial({ map,transparent:true,alphaTest:.01,side:THREE.DoubleSide }));
-  mesh.position.y=canvas.height*.0125; mesh.userData.ownedTexture=map;
+  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(result.width,result.height),new THREE.MeshBasicMaterial({ map,transparent:true,alphaTest:.0001,side:THREE.FrontSide,depthTest:!result.seeThrough,depthWrite:!result.seeThrough }));
+  mesh.position.set(result.x,result.y,0); mesh.userData.ownedTexture=map;
+  mesh.userData.unsupportedFonts=result.unsupportedFonts;
+  if (result.seeThrough) mesh.renderOrder=1000;
   return mesh;
 }
 

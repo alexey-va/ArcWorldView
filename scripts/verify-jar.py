@@ -50,6 +50,9 @@ SCENE_API_CLASSES = tuple(
         "ArcSceneLocation",
         "ArcSceneLocationSource",
         "ArcSceneObservationService",
+        "ArcSceneDisplay", "ArcSceneDisplayPose", "ArcSceneVector3", "ArcSceneQuaternion", "ArcSceneItem",
+        "ArcSceneTextRun", "ArcSceneTextContent", "ArcSceneDisplayContent", "ArcSceneDisplayContent$Item",
+        "ArcSceneDisplayContent$Text", "ArcSceneDisplayTimeline", "ArcSceneDisplayKeyframe", "ArcSceneDisplayItemSwitch",
     )
 )
 API_REFERENCE = re.compile(rb"ru/arc/paper/api/[A-Za-z0-9_$]+")

@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { frameConnection, chunkInBounds } = require("../src/view-priority.cjs");
+const { rememberDisplayClock } = require("../src/display-animation.cjs");
 
 // Exercise the actual async request/decode/queue boundary without booting WebGL.
 const app = fs.readFileSync(path.join(__dirname, "../src/app.cjs"), "utf8");
@@ -20,7 +21,7 @@ function harness(json) {
     module: { exports: {} }, json, AbortController, setTimeout, clearTimeout,
     performance, generation: 1, epoch: "epoch-a", sequence: 7,
     lastFrameAt: 0, lastTransportAt: 0, capturedAt: null, lastAcceptedView: null,
-    liveFramesSeen: false, sourceState: {}, bootstrapController: null,
+    liveFramesSeen: false, sourceState: {}, bootstrapController: null, displayClock: {}, rememberDisplayClock,
     loadedCount: 0, totalCount: 0, chunkRequestId: 0, workerFailed: false, hasGeometry: false,
     document: { hidden: false }, camera: {}, controls: { target: {} }, currentView: null,
     cameraView: () => ({}), chunkPriority: chunk => chunk.priority ?? 0, frameConnection, chunkInBounds,
@@ -34,7 +35,7 @@ function harness(json) {
     terrain: { addColumn(...args) { added.push(args); }, removeColumn(...args) { removed.push(args); } },
     refreshCatalog: async () => {}, actorUpdates: 0, updateActors() { scope.actorUpdates++; }, connection() {}, message() {},
     $: () => ({ textContent: "" }), resets: 0,
-    clearWorld() { scope.resets++; scope.loadedChunks.clear(); pendingChunks.clear(); scope.chunkDescriptors.clear(); }
+    clearWorld() { scope.resets++; scope.loadedChunks.clear(); pendingChunks.clear(); scope.chunkDescriptors.clear(); scope.displayClock={}; }
   });
   vm.runInContext(boundary + "\nmodule.exports = { fetchChunk, receiveFrame, pumpChunks };", scope);
   return { scope, ...scope.module.exports, added, removed, decodeRequests, pendingChunks, decodeStarted };

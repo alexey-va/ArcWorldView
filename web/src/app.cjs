@@ -16,6 +16,8 @@ const { normalizePlayerSkinImage } = require("@viewer/player-skin");
 const { setAssets, assetUrl } = require("./viewer-utils.cjs");
 const { sampleActor, interpolationDelay, rememberActorFrame } = require("./actor-motion.cjs");
 const { terrainInstallQueue } = require("./terrain-install-queue.cjs");
+const { displayQuaternion } = require("./display-pose.cjs");
+const { rememberDisplayClock, sampleDisplayAnimation } = require("./display-animation.cjs");
 const { configureModels,itemMesh,blockMesh,textMesh,armorParts,animateModelTextures } = require("./model-renderer.cjs");
 const { playerHandBone, playerHandGripMatrix, heldItemArmRotation } = require("./native-item-geometry.cjs");
 const { createAtmosphere } = require("./atmosphere.cjs");
@@ -38,6 +40,7 @@ let lastTransportAt = 0, capturedAt = null, lastWorkAt = -Infinity, currentView 
 let liveFramesSeen = false, sourceState = {}, bootstrapController = null;
 let catalogRefreshing = null;
 let workerFailed = false, actorsDirty = true;
+let displayClock = {};
 let actorQueue = [];
 const compatibility = new Map();
 let pinnedRecord = null, detailData = null, detailController = null, detailTimer = null, detailToken = 0;
@@ -96,6 +99,7 @@ function clearWorld() {
   bootstrapController?.abort(); bootstrapController = null;
   liveFramesSeen = false; sourceState = {};
   history.length = 0;
+  displayClock = {};
   terrainInstalls?.clear();
   for (const actor of actors.values()) disposeMesh(actor.mesh);
   actors.clear();
@@ -239,11 +243,11 @@ function displayActor(record) {
 
 async function updateDisplay(actor,record) {
   const display=record.display;
-  const signature=JSON.stringify([display.kind,display.item,display.mode,display.blockData,display.text]);
+  const signature=JSON.stringify([display.kind,display.item,display.mode,display.blockData,display.text,display.textStyle]);
   if (actor.contentSignature===signature) return;
   actor.contentSignature=signature; actor.modelError=false;
   try {
-    const mesh=display.kind==="item" ? await itemMesh(display.item,display.mode) : display.kind==="block" ? await blockMesh(display.blockData) : await textMesh(display.text);
+    const mesh=display.kind==="item" ? await itemMesh(display.item,display.mode) : display.kind==="block" ? await blockMesh(display.blockData) : await textMesh(display.text,display.textStyle);
     if (actors.get(record.id)!==actor || actor.contentSignature!==signature) { disposeMesh(mesh); return; }
     for(const child of [...actor.display.content.children]) disposeMesh(child);
     actor.display.content.rotation.y=display.kind==="item" ? Math.PI : 0;
@@ -374,7 +378,7 @@ function syncActors() {
         actor.mesh.visible = wanted;
         if (wanted) {
           if (actor.body) { loadSkin(actor, record).catch(() => { failedAssets = true; }); void updateEquipment(actor, record); }
-          if (actor.display) void updateDisplay(actor, record);
+          if (actor.display && !record.display.animation) void updateDisplay(actor, record);
           if (actor.modelError) modelIssue(record, typeof actor.modelError === "string" ? actor.modelError : "equipment-or-display-unavailable");
           else modelIssues.delete(record.id);
         }
@@ -393,7 +397,7 @@ function syncActors() {
       if (!actor) { modelIssue(record, "native-model-unavailable"); continue; }
       actor.record = actorRecords.get(record.id);
       if (actor.body) void updateEquipment(actor, actor.record);
-      if (actor.display) void updateDisplay(actor, actor.record);
+      if (actor.display && !actor.record.display.animation) void updateDisplay(actor, actor.record);
     } catch (error) { modelIssue(record, error.message); }
   }
   viewport.dataset.actors = String(actors.size);
@@ -493,11 +497,7 @@ function applyActorPose(actor, value, delta) {
     actor.display.left.quaternion.set(...(display.leftRotation ?? [0,0,0,1])).normalize();
     actor.display.scale.scale.set(...(display.scale ?? [1,1,1]));
     actor.display.right.quaternion.set(...(display.rightRotation ?? [0,0,0,1])).normalize();
-    const yaw=-THREE.MathUtils.degToRad(value.yawDegrees),pitch=THREE.MathUtils.degToRad(value.pitchDegrees);
-    if(display.billboard==="CENTER") actor.mesh.quaternion.copy(camera.quaternion);
-    else if(display.billboard==="VERTICAL") actor.mesh.rotation.set(0,Math.atan2(camera.position.x-value.position[0],camera.position.z-value.position[2]),0);
-    else if(display.billboard==="HORIZONTAL") actor.mesh.rotation.set(camera.rotation.x,yaw,0,"ZYX");
-    else actor.mesh.rotation.set(pitch,yaw,0,"YXZ");
+    displayQuaternion(display.billboard,value.yawDegrees,value.pitchDegrees,camera.quaternion,actor.mesh.quaternion);
     return;
   }
   for (const body of [actor.body, ...actor.bodies.map((part) => part.mesh)].filter(Boolean)) {
@@ -626,7 +626,11 @@ async function receiveFrame(frame, expectedGeneration) {
   sourceState = { stale: Boolean(frame.stale), frozen: Boolean(frame.frozen) };
   if(fresh) lastFrameAt = lastTransportAt;
   loadedCount = frame.loadedChunks; totalCount = frame.totalChunks;
-  if(fresh) updateActors(frame.entities, lastFrameAt, typeof frame.capturedAt === "number" ? frame.capturedAt : Date.parse(frame.capturedAt));
+  if(fresh) {
+    const captured = typeof frame.capturedAt === "number" ? frame.capturedAt : Date.parse(frame.capturedAt);
+    rememberDisplayClock(displayClock,captured,lastFrameAt,sourceState.stale || sourceState.frozen);
+    updateActors(frame.entities,lastFrameAt,captured);
+  }
   chunkDescriptors.clear();
   for (const chunk of frame.chunks) chunkDescriptors.set(`${chunk.x},${chunk.z}`, chunk);
   for (const [key, job] of pendingChunks) if (chunkDescriptors.get(key)?.revision !== job.revision) job.controller.abort();
@@ -782,8 +786,11 @@ function animate(now) {
   const delay = interpolationDelay(history);
   for (const [id, actor] of actors) {
     if (!actor.mesh.visible) continue;
-    const value = sampleActor(history, id, now, delay);
-    if (value) applyActorPose(actor, value, delta);
+    const value = (actor.display && sampleDisplayAnimation(actor.record,now,displayClock)) || sampleActor(history,id,now,delay);
+    if (value) {
+      if (actor.display && actor.record.display.animation) void updateDisplay(actor,value);
+      applyActorPose(actor,value,delta);
+    }
   }
   if (!hasGeometry && Object.keys(terrain.sectionMeshs).length && loadedChunks.size) {
     hasGeometry = true; $("scene-message").hidden = true; viewport.dataset.state = "ready";

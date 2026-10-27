@@ -39,6 +39,33 @@ the sequence is unchanged. Eligible scenes rotate fairly through two capture
 lanes rather than letting the most recent two request streams starve others.
 Actors contain `{id,kind,type,name,position:[x,y,z],yawDegrees,headYawDegrees,pitchDegrees,pose,scale,seated,skin:{url,model},equipment}`.
 Kind is `player`, `npc`, `mob` or `display`; type is a Minecraft entity type.
+Display records retain native billboard, SRT and item context. A text display
+keeps the plain `display.text` fallback and may additionally contain
+`display.textStyle:{lineWidth,alignment,backgroundColor,defaultBackground,opacity,shadow,seeThrough,runs}`.
+Background color is packed ARGB, opacity is unsigned 0–255, and alignment is
+`LEFT`, `CENTER` or `RIGHT`. Runs contain `{text,color,font,bold,italic,underlined,strikethrough,obfuscated}`;
+color is RGB and font is a resource key. Capture retains at most 256 codepoints,
+512 component nodes and 64 inherited-style runs. Excessive style fragmentation
+omits runs and keeps the bounded plain fallback. Hover/click events are never
+transferred. Clients draw text as text, never HTML. Old clients may ignore this
+optional style object. A new client uses native defaults for old frames.
+Public packet displays use the same `kind:display` actor payload, with stable
+owner IDs. They enter only through an explicitly registered public scene source;
+packet display registries and per-player previews are never enumerated. The
+common display fields retain `blockLight`, `skyLight`, `viewRange`,
+`shadowRadius` and `shadowStrength` in addition to billboard and SRT.
+An item display may contain `animation:{capturedAt,capturedFrame,sampleMillis,items,samples,itemSwitches}`.
+`capturedAt` is the server epoch in milliseconds, `sampleMillis` is the fixed
+spacing, and each sample contains world `position`, `yawDegrees`, `pitchDegrees`,
+native SRT and a discrete `itemIndex` into the visible item palette. At most
+21 samples, 8 palette items and 2000 ms are retained per display; each query
+returns at most 128 displays. Up to 8 sorted `itemSwitches:{offsetMillis,itemIndex}`
+retain exact discrete native reward changes separately from the pose cadence.
+The owner computes these poses using its native
+trajectory. A client interpolates locally with requestAnimationFrame, replaces
+the forward window on refresh without restarting the phase, and freezes at the
+last sample after expiry. A window is never looped. One canonical crate caption
+is exported; private player-facing front/back packet copies are absent.
 Skin URLs are same-origin validated texture hashes. Equipped visible items may
 contain material, amount, customModelData and tint; inventories/chat are absent.
 Poll frames at 5 Hz; interpolate around 250 ms and stop extrapolating on stale

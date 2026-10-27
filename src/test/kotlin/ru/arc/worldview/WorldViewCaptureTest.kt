@@ -133,6 +133,7 @@ class WorldViewCaptureTest : FunSpec({
             val assets = WorldViewAssets.load(settings)
             val model = WorldViewReadModel()
             val observer = mockk<ArcSceneObservationService>()
+            every { observer.displays(any(), any()) } returns emptyList()
             var releases = 0
             every { observer.registerChunkListener(plugin, "world-view", any()) } returns AutoCloseable { releases++ }
             every { observer.locations(32) } returns emptyList()
@@ -169,6 +170,7 @@ class WorldViewCaptureTest : FunSpec({
             val assets = WorldViewAssets.load(settings)
             val model = WorldViewReadModel()
             val observer = mockk<ArcSceneObservationService>()
+            every { observer.displays(any(), any()) } returns emptyList()
             every { observer.registerChunkListener(plugin, "world-view", any()) } returns AutoCloseable {}
             every { observer.locations(32) } returns emptyList()
             val entered = CountDownLatch(1)
@@ -207,6 +209,7 @@ class WorldViewCaptureTest : FunSpec({
             val assets = WorldViewAssets.load(settings)
             val model = WorldViewReadModel()
             val observer = mockk<ArcSceneObservationService>()
+            every { observer.displays(any(), any()) } returns emptyList()
             every { observer.registerChunkListener(plugin, "world-view", any()) } returns AutoCloseable {}
             every { observer.locations(32) } returns emptyList()
             every { observer.entities(any(), any()) } returns emptyList()
