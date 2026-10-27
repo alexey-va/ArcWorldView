@@ -14,7 +14,7 @@ const { playerBodyMesh, playerBones, normalizePlayerSkeleton, applyPlayerGeometr
 const { actorBoneRotations, offsetBoneRotation } = require("@viewer/actor-pose");
 const { normalizePlayerSkinImage } = require("@viewer/player-skin");
 const { setAssets, assetUrl } = require("./viewer-utils.cjs");
-const { sampleActor, interpolationDelay, rememberActorFrame } = require("./actor-motion.cjs");
+const { sampleActor, interpolationDelay, rememberActorFrame, actorWalk } = require("./actor-motion.cjs");
 const { terrainInstallQueue } = require("./terrain-install-queue.cjs");
 const { displayQuaternion } = require("./display-pose.cjs");
 const { rememberDisplayClock, sampleDisplayAnimation } = require("./display-animation.cjs");
@@ -33,6 +33,7 @@ const actors = new Map(), actorRecords = new Map(), loadedChunks = new Map(), pe
 const chunkDescriptors = new Map(), chunkRetries = new Map(), modelIssues = new Map();
 const terrainWarnings=new Map();
 const history = [];
+const actorMotions = new Map();
 let assets, catalog, selectedScene, renderer, scene, camera, controls, terrain, terrainRoot, terrainInstalls, decoder, atmosphere;
 let generation = 0, epoch = null, sequence = -1, lastFrameAt = 0, lastLoopAt = 0, chunkRequestId = 0, loadedCount = 0, totalCount = 0;
 let cameraMode = "isometric", selectedActor = null, hoveredActor = null, pinnedActor = null, pollController = null, hasGeometry = false, span = 64, failedAssets = false;
@@ -99,6 +100,7 @@ function clearWorld() {
   bootstrapController?.abort(); bootstrapController = null;
   liveFramesSeen = false; sourceState = {};
   history.length = 0;
+  actorMotions.clear();
   displayClock = {};
   terrainInstalls?.clear();
   for (const actor of actors.values()) disposeMesh(actor.mesh);
@@ -349,7 +351,7 @@ function updateModelNotice() {
 
 function updateActors(records, at, capturedAt) {
   const current = new Map(records.map(record => [record.id, record]));
-  rememberActorFrame(history, { at, capturedAt, actors:current });
+  rememberActorFrame(history, { at, capturedAt, actors:current },actorMotions);
   actorRecords.clear();
   for (const [id, record] of current) {
     actorRecords.set(id, record);
@@ -510,12 +512,12 @@ function applyActorPose(actor, value, delta) {
   actor.mesh.position.set(...value.position);
   actor.mesh.rotation.y = Math.PI - THREE.MathUtils.degToRad(value.yawDegrees);
   actor.mesh.scale.setScalar(Number(value.scale) > 0 ? Number(value.scale) : 1);
-  actor.phase += value.speed * delta * 5.5;
-  const walk = reducedMotion ? 0 : Math.sin(actor.phase) * 0.62 * Math.min(value.speed / 1.4, 1);
+  const walk = actorWalk(actor,value,delta,reducedMotion);
   const crouching = value.pose === "SNEAKING" || value.pose === "CROUCHING" || value.pose?.crouching;
   if (actor.body) {
     if (actor.skinTexture && actor.body.material.map !== actor.skinTexture) actor.body.material.map = actor.skinTexture;
     const pose = actorBoneRotations({ riding: Boolean(value.seated), crouching: Boolean(crouching), walk, swingProgress: 0 });
+    if (!value.seated) for (const name of ["leftarm","rightarm"]) pose[name].x /= 1.4;
     for (const [name, rotation] of Object.entries(pose)) {
       if (!actor.bones[name]) continue;
       const resolved = offsetBoneRotation(actor.base[name], actor.heldHands?.[name] ? heldItemArmRotation(rotation) : rotation);
@@ -786,7 +788,7 @@ function animate(now) {
   const delay = interpolationDelay(history);
   for (const [id, actor] of actors) {
     if (!actor.mesh.visible) continue;
-    const value = (actor.display && sampleDisplayAnimation(actor.record,now,displayClock)) || sampleActor(history,id,now,delay);
+    const value = (actor.display && sampleDisplayAnimation(actor.record,now,displayClock)) || sampleActor(history,id,now,delay,actorMotions.get(id));
     if (value) {
       if (actor.display && actor.record.display.animation) void updateDisplay(actor,value);
       applyActorPose(actor,value,delta);

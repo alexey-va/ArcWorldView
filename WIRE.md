@@ -39,6 +39,12 @@ the sequence is unchanged. Eligible scenes rotate fairly through two capture
 lanes rather than letting the most recent two request streams starve others.
 Actors contain `{id,kind,type,name,position:[x,y,z],yawDegrees,headYawDegrees,pitchDegrees,pose,scale,seated,skin:{url,model},equipment}`.
 Kind is `player`, `npc`, `mob` or `display`; type is a Minecraft entity type.
+An optional `sampledAt` epoch-millisecond value records when that actor's
+appearance and position were captured on the server. Cached native observations
+retain the same timestamp across scene frames; a new capture advances it even
+when the actor is stationary. Packet-source observations use the frame capture
+time. Old clients may ignore this field; new clients use `capturedAt` when it is
+absent. This is sampling metadata, not a player or inventory identifier.
 Display records retain native billboard, SRT and item context. A text display
 keeps the plain `display.text` fallback and may additionally contain
 `display.textStyle:{lineWidth,alignment,backgroundColor,defaultBackground,opacity,shadow,seeThrough,runs}`.
@@ -68,8 +74,9 @@ last sample after expiry. A window is never looped. One canonical crate caption
 is exported; private player-facing front/back packet copies are absent.
 Skin URLs are same-origin validated texture hashes. Equipped visible items may
 contain material, amount, customModelData and tint; inventories/chat are absent.
-Poll frames at 5 Hz; interpolate around 250 ms and stop extrapolating on stale
-data. `epoch` changes on plugin restart. A scene switch or epoch change resets
+Poll frames at 5 Hz; buffer actor samples according to source cadence and jitter,
+and hold the latest observed pose when the buffer runs out. `epoch` changes on
+plugin restart. A scene switch or epoch change resets
 the browser's chunk and actor state.
 
 `chunks` lists `{x,z,revision,url}` for currently captured loaded chunks. Each

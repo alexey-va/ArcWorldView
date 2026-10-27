@@ -92,6 +92,7 @@ const spawnBlocks = new Map([...blocks].map(([position,block]) => [position,bloc
 const sceneChunks = new Map([["village",encodeChunks(blocks)],["spawn",encodeChunks(spawnBlocks)]]);
 const scene={id:"village",name:"Деревня · тестовая сцена",kind:"settlement",world:"fixture",bounds:{minX:-24,maxX:24,minY:56,maxY:88,minZ:-24,maxZ:24},camera:{target:[0,64,0],azimuthDegrees:42,elevationDegrees:35.264,spanBlocks:58},status:"available"};
 const inspectionCameras = [
+  ["walkers","Шаги и интерполяция 1 Hz + jitter",[0,64,0],15,12,18],
   ["actors","Модели и движение",[8,64,18.5],25,17,18],
   ["hands","Предметы в руках",[9.5,64,21],25,7,22],
   ["portals","Слои и анимация порталов",[8,65,18],0,18,12],
@@ -170,6 +171,23 @@ const server=http.createServer((request,response)=>{
       walk("cow:1","mob","cow","Корова",3,16),walk("sheep:1","mob","sheep","Овца",6,16),walk("pig:1","mob","pig","Свинья",9,16),walk("chicken:1","mob","chicken","Курица",12,16),
       walk("horse:1","mob","horse","Лошадь",4,21),walk("zombie:1","mob","zombie","Зомби",8,21),{...walk("player:1","player","player","Игрок в броне",12,21),equipment}
     ]:[{...walk("player:1","player","player","Игрок",-5,0),equipment:equipment.slice(0,2)},walk("npc:1","npc","player","Житель",6,0,2),walk("cow:1","mob","cow","Корова",-6,-7,1),walk("sheep:1","mob","sheep","Овца",-9,-6,3),walk("pig:1","mob","pig","Свинья",13,18,2)];
+    if (sceneId === "walkers") {
+      const patrol = time => {
+        const phase = time % 12;
+        return phase < 4 ? {x:-4+phase*2,yaw:-90} : phase < 6 ? {x:4,yaw:-90} : phase < 10 ? {x:4-(phase-6)*2,yaw:90} : {x:-4,yaw:90};
+      };
+      const walker = (id,z,seconds,name,skin="wide/steve") => {
+        const pose = patrol(seconds);
+        return {id,kind:"player",type:"player",name,position:[pose.x,63,z],yawDegrees:pose.yaw,headYawDegrees:pose.yaw,pitchDegrees:0,
+          sampledAt:start+seconds*1000,pose:"STANDING",scale:1.4,seated:false,equipment:[],skin:{url:`assets/${revision}/native/assets/minecraft/textures/entity/player/${skin}.png`,model:skin.startsWith("slim/")?"slim":"default"}};
+      };
+      const nativeTime = Math.floor(t), immediateTime = t;
+      entities = [walker("walk:native",-3,nativeTime,"Native cache 1 Hz"),walker("walk:fast",0,immediateTime,"Immediate capture 5 Hz"),
+        {...walker("walk:idle",3,nativeTime,"Stationary with fresh 1 Hz captures"),position:[0,63,3],yawDegrees:(nativeTime%8)*45,headYawDegrees:(nativeTime%8)*45},
+        display("walk:label:native","Native cache",[-5.5,66.2,-3],{kind:"text",text:"Native 1 Hz",billboard:"CENTER"}),
+        display("walk:label:fast","Immediate capture",[-5.5,66.2,0],{kind:"text",text:"Immediate 5 Hz",billboard:"CENTER"}),
+        display("walk:label:idle","Stationary",[-5.5,66.2,3],{kind:"text",text:"Stationary / turn",billboard:"CENTER"})];
+    }
     if (sceneId === "residents") entities = [walk("npc:1","npc","player","Житель",6,0,2)];
     if (sceneId === "portals") entities = [2110001,2110003,2110005].filter(cmd=>manifest.items?.[`minecraft:paper|${cmd}|none`]).map((cmd,index) => display(`portal:${cmd}`,"Портал",[3+index*5,65,18],{
       kind:"item",item:{material:"minecraft:paper",customModelData:cmd,amount:1},mode:"FIXED",
@@ -179,7 +197,9 @@ const server=http.createServer((request,response)=>{
     const view = requestedView(url, scene.bounds);
     const inView = [...chunks.values()].filter(chunk => chunk.x * 16 < view.maxX && (chunk.x + 1) * 16 > view.minX && chunk.z * 16 < view.maxZ && (chunk.z + 1) * 16 > view.minZ);
     const visibleEntities = allEntities.filter(actor => actor.position[0] >= view.minX && actor.position[0] < view.maxX && actor.position[2] >= view.minZ && actor.position[2] < view.maxZ);
-    return send(response,{sceneId,view,epoch:"fixture-2",seq:snapshot,capturedAt:start+t*1000,reset:!url.searchParams.has("after"),loadedChunks:inView.length,totalChunks:inView.length,entities:visibleEntities,chunks:inView.map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
+    const frame={sceneId,view,epoch:"fixture-2",seq:snapshot,capturedAt:start+t*1000,reset:!url.searchParams.has("after"),loadedChunks:inView.length,totalChunks:inView.length,entities:visibleEntities,chunks:inView.map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]};
+    if(sceneId==="walkers") return setTimeout(()=>send(response,frame),[0,80,160,20,120][snapshot%5]);
+    return send(response,frame);
   }
   const chunkMatch=url.pathname.match(/^\/v1\/scenes\/([a-z_]+)\/chunks\/(-?\d+)\/(-?\d+)\/1\.json$/);
   const chunk=chunkMatch&&locations.some(location=>location.id===chunkMatch[1])&&(sceneChunks.get(chunkMatch[1])??sceneChunks.get("village")).get(`${chunkMatch[2]},${chunkMatch[3]}`);

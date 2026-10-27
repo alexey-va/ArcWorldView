@@ -82,7 +82,7 @@ test("rAF samples the latest display window while ordinary actors keep their exi
   const code=source.slice(source.indexOf("function animate("),source.indexOf("async function start("));
   const observed=[], content=[], actor={record:record(),display:{},mesh:{visible:true}}, historyCalls=[];
   const scope=vm.createContext({requestAnimationFrame(){},document:{hidden:false},workerFailed:false,lastLoopAt:0,controls:{update(){}},selectedScene:null,
-    terrainInstalls:{drain(){}},currentView:null,actors:new Map([[actor.record.id,actor]]),history:[],interpolationDelay:()=>1000,displayClock:clock(),
+    terrainInstalls:{drain(){}},currentView:null,actors:new Map([[actor.record.id,actor]]),actorMotions:new Map(),history:[],interpolationDelay:()=>1000,displayClock:clock(),
     sampleDisplayAnimation,sampleActor:(...args)=>{historyCalls.push(args);return {position:[100,64,2]};},updateDisplay:(_actor,value)=>content.push(value),
     applyActorPose:(_actor,value)=>observed.push(value),hasGeometry:true,lastTransportAt:0,animateModelTextures(){},atmosphere:{render(){}}});
   vm.runInContext(code+"\nthis.animate=animate",scope); scope.animate(1500);

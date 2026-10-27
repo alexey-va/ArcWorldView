@@ -21,6 +21,21 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 
 class WorldViewProtocolTest : FunSpec({
+    test("cached actor sample time survives frame serialization independently of frame time") {
+        val actor = CapturedActor("native:example", "player", "player", "Player", listOf(1.0, 64.0, 2.0),
+            0f, 0f, 0f, "STANDING", 1.0, false, null, emptyList(), sampledAt = 1_000)
+        val wire = ActorWire.wire(actor) {}
+        fun json(at: Long) = JsonParser.parseString(String(WirePayload.json(
+            SceneFrame("spawn", "epoch", at, at, false, 0, 0, listOf(wire), emptyList(), emptyList())
+        ).bytes)).asJsonObject
+        json(1_200)["entities"].asJsonArray[0].asJsonObject["sampledAt"].asLong shouldBe 1_000
+        json(1_400)["entities"].asJsonArray[0].asJsonObject["sampledAt"].asLong shouldBe 1_000
+        val next = ActorWire.wire(actor.copy(sampledAt = 1_500)) {}
+        next.sampledAt shouldBe 1_500
+        val legacy = ActorWire.wire(actor.copy(sampledAt = null)) {}
+        JsonParser.parseString(String(WirePayload.json(legacy).bytes)).asJsonObject.has("sampledAt") shouldBe false
+    }
+
     test("six opaque full neighbours hide interior identities without changing solid occupancy") {
         fun block(state: String, occluding: Boolean = true, full: Boolean = true) = mockk<BlockData>().also { data ->
             every { data.asString } returns state

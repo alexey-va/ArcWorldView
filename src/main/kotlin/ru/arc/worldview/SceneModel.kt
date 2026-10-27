@@ -33,7 +33,7 @@ data class ActorSkin(val url: String, val model: String)
 data class ViewerActor(val id: String, val kind: String, val type: String, val name: String,
     val position: List<Double>, val yawDegrees: Float, val headYawDegrees: Float, val pitchDegrees: Float,
     val pose: String, val scale: Double, val seated: Boolean, val skin: ActorSkin?, val equipment: List<Any>,
-    val display: Map<String, Any?>? = null)
+    val display: Map<String, Any?>? = null, val sampledAt: Long? = null)
 data class SceneFrame(val sceneId: String, val epoch: String, val seq: Long, val capturedAt: Long, val reset: Boolean,
     val loadedChunks: Int, val totalChunks: Int, val entities: List<ViewerActor>, val chunks: List<ChunkDescriptor>,
     val removedChunks: List<ChunkKey>, val view: SceneView? = null, val terrainComplete: Boolean = false)

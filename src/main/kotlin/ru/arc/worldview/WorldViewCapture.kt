@@ -301,7 +301,7 @@ class WorldViewCapture(
             val actor = ActorWire.native(entity) ?: continue
             val owners = active.filter { it.worldId == world && it.published.definition.bounds.contains(actor.position[0], actor.position[1], actor.position[2]) }
             if (owners.isEmpty()) { nativeActors[id] = known; continue }
-            known.worldId = world; known.captured = actor; known.at = now
+            known.worldId = world; known.captured = actor.copy(sampledAt = now); known.at = now
             nativeActors[id] = known
             val key = ChunkKey(floor(actor.position[0]).toInt() shr 4, floor(actor.position[2]).toInt() shr 4)
             for (owner in owners) {
@@ -348,8 +348,8 @@ class WorldViewCapture(
             val b = owner.published.captureBounds(now)
             val bounds = ArcSceneBounds(world, b.minX.toDouble(), b.minY.toDouble(), b.minZ.toDouble(),
                 b.maxX.toDouble(), b.maxY.toDouble(), b.maxZ.toDouble())
-            val observed = observer.entities(bounds, settings.entityLimit).map(ActorWire::observed)
-            val displays = observer.displays(bounds, min(settings.entityLimit, 128)).map(ActorWire::observedDisplay)
+            val observed = observer.entities(bounds, settings.entityLimit).map { ActorWire.observed(it).copy(sampledAt = now) }
+            val displays = observer.displays(bounds, min(settings.entityLimit, 128)).map { ActorWire.observedDisplay(it).copy(sampledAt = now) }
             val actors = (observed + displays + nativeActors.values.asSequence().filter { it.worldId == world && now - it.at <= 2_000 }
                 .mapNotNull { it.captured }.filter { b.contains(it.position[0], it.position[1], it.position[2]) }.toList())
                 .distinctBy { it.id }.take(settings.entityLimit)

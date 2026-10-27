@@ -24,7 +24,7 @@ import java.util.Base64
 data class CapturedActor(val id: String, val kind: String, val type: String, val name: String,
     val position: List<Double>, val yaw: Float, val headYaw: Float, val pitch: Float, val pose: String,
     val scale: Double, val seated: Boolean, val texture: String?, val equipment: List<Any>,
-    val display: Map<String, Any?>? = null)
+    val display: Map<String, Any?>? = null, val sampledAt: Long? = null)
 
 object ActorWire {
     private val plain = PlainTextComponentSerializer.plainText()
@@ -119,6 +119,6 @@ object ActorWire {
             ActorSkin("v1/skins/${hash.lowercase()}.png", if (data.getAsJsonObject("metadata")?.get("model")?.asString == "slim") "slim" else "default")
         }.getOrNull() }
         return ViewerActor(actor.id, actor.kind, actor.type, actor.name, actor.position, actor.yaw, actor.headYaw,
-            actor.pitch, actor.pose, actor.scale, actor.seated, skin, actor.equipment, actor.display)
+            actor.pitch, actor.pose, actor.scale, actor.seated, skin, actor.equipment, actor.display, actor.sampledAt)
     }
 }

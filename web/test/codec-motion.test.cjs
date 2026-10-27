@@ -45,10 +45,10 @@ test("one-Hz snapshots keep a continuous gait until the buffered movement ends",
   for (const now of [3000,3250,3500,3750,3999]) {
     const value = sampleActor(history,"npc",now);
     assert.equal(value.speed,1);
-    assert.ok(value.position[0] >= 1 && value.position[0] < 2);
+    assert.ok(value.position[0] >= .85 && value.position[0] < 2);
   }
-  assert.equal(sampleActor(history,"npc",4001).position[0],2);
-  assert.equal(sampleActor(history,"npc",4001).speed,0,"no extrapolated gait after the buffer runs out");
+  assert.equal(sampleActor(history,"npc",4151).position[0],2);
+  assert.equal(sampleActor(history,"npc",4151).speed,0,"no extrapolated gait after the bounded jitter buffer runs out");
   const fast = [frame(1000,0),frame(1200,1),frame(1400,2)];
   assert.equal(interpolationDelay(fast),250,"5 Hz retains the existing delay");
   assert.equal(interpolationDelay([frame(1000,0,1000),frame(2800,1,1200)]),250,"network jitter does not set source cadence");
