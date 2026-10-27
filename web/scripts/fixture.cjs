@@ -93,6 +93,7 @@ const sceneChunks = new Map([["village",encodeChunks(blocks)],["spawn",encodeChu
 const scene={id:"village",name:"Деревня · тестовая сцена",kind:"settlement",world:"fixture",bounds:{minX:-24,maxX:24,minY:56,maxY:88,minZ:-24,maxZ:24},camera:{target:[0,64,0],azimuthDegrees:42,elevationDegrees:35.264,spanBlocks:58},status:"available"};
 const inspectionCameras = [
   ["actors","Модели и движение",[8,64,18.5],25,17,18],
+  ["hands","Предметы в руках",[9.5,64,21],25,7,22],
   ["chests_front","Сундуки · спереди",[8,63.6,4.5],205,9],
   ["chests_back","Сундуки · сзади",[8,63.6,4.5],285,6,75],
   ["bed","Кровать",[-14.5,63.5,5],135,7],
@@ -124,14 +125,17 @@ const server=http.createServer((request,response)=>{
   if(/^\/v1\/scenes\/[a-z_]+\/frame$/.test(url.pathname) && locations.some(location=>location.id===url.pathname.split('/')[3])) {
     const sceneId=url.pathname.split('/')[3],chunks=sceneChunks.get(sceneId)??sceneChunks.get("village");
     const t=(Date.now()-start)/1000;
-    const inspecting=sceneId==="actors",motionTime=inspecting?Math.floor(t/16)*10+Math.min(t%16,10):t;
+    const inspectHands=sceneId==="hands",inspecting=sceneId==="actors"||inspectHands,motionTime=inspecting?Math.floor(t/16)*10+Math.min(t%16,10):t;
     const walk=(id,kind,type,name,x,z,phase=0)=>{
       const angle=motionTime*(inspecting ? .9 : .45)+phase,rx=inspecting ? 1 : 4,rz=inspecting ? .25 : 2;
       const yaw=Math.atan2(-Math.cos(angle)*rx,-Math.sin(angle)*rz)*180/Math.PI;
       return {id,kind,type,name,position:[x+Math.sin(angle)*rx,63,z+Math.cos(angle)*rz],yawDegrees:yaw,headYawDegrees:yaw,pitchDegrees:0,pose:"STANDING",scale:1,seated:false,skin:type==="player"?{url:`assets/${revision}/native/assets/minecraft/textures/entity/player/wide/steve.png`,model:"default"}:null,equipment:{}};
     };
     const equipment=[{slot:"HAND",material:"minecraft:iron_axe",amount:1},...(["HEAD","CHEST","LEGS","FEET"].map((slot,index)=>({slot,material:`minecraft:iron_${["helmet","chestplate","leggings","boots"][index]}`,amount:1})))];
-    const entities=inspecting?[
+    const entities=inspectHands?[
+      {...walk("hand:right","player","player","Правая рука",8,21),equipment},
+      {...walk("hand:left","player","player","Левая рука",11,21),equipment:equipment.map(item=>item.slot==="HAND"?{...item,slot:"OFF_HAND"}:item)}
+    ]:inspecting?[
       walk("cow:1","mob","cow","Корова",3,16),walk("sheep:1","mob","sheep","Овца",6,16),walk("pig:1","mob","pig","Свинья",9,16),walk("chicken:1","mob","chicken","Курица",12,16),
       walk("horse:1","mob","horse","Лошадь",4,21),walk("zombie:1","mob","zombie","Зомби",8,21),{...walk("player:1","player","player","Игрок в броне",12,21),equipment}
     ]:[{...walk("player:1","player","player","Игрок",-5,0),equipment:equipment.slice(0,2)},walk("npc:1","npc","player","Житель",6,0,2),walk("cow:1","mob","cow","Корова",-6,-7,1),walk("sheep:1","mob","sheep","Овца",-9,-6,3),walk("pig:1","mob","pig","Свинья",13,18,2)];

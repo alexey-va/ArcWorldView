@@ -45,3 +45,34 @@ horse, zombie and a player in full iron armour. Review it at multiple angles
 while moving, stopping and resuming. Tests of the bounded pose do not claim
 support for every species-specific animation, baby shape, saddle, mob variant
 or resource-pack custom entity model.
+
+## Held items
+
+`native-item-geometry.cjs` supplies an owned adapter around the immutable shared
+geometry helper's `none` context. Pinned `ItemTransform` (`hqk`) composes
+translation, quaternion XYZ rotation and scale, and flips X translation plus
+Y/Z angles for the left hand. `ItemInHandLayer` (`ibb`, the third-person layer)
+places the grip at `[-1,-10,-2]` / `[1,-10,-2]` in this skeleton's pixel frame.
+`HumanoidModel` (`gzo`) supplies the ITEM arm bend; `PlayerModel` (`hht`) shifts
+slim-hand attachment by half a pixel. These transforms are independent of the
+first-person `ItemInHandRenderer` camera path.
+The pinned Bedrock mesh's arm names are opposite its physical hands when viewed
+from its textured front. An attachment-only arm map and local X reflection
+reproduce `LivingEntityRenderer`'s native frame without reflecting skin meshes.
+The regression compares the complete native world/arm/item matrix for both
+hands, both arm widths and 25 moving poses at different body headings.
+
+Only the exact generated fallback sentinel (`16×16`, Z `8..8.01`, two layer0
+faces without explicit UVs) receives native sprite geometry. `ItemModelGenerator`
+(`hqj`) uses Z `7.5..8.5`, reversed north-face UVs and opaque-pixel contour walls.
+The old two double-sided planes overlaid a mirrored second silhouette: the
+official 16×16 iron axe has 60 opaque pixels, while their union had 104.
+The adapter preserves original texture resolution and explicit IA geometry.
+It caches extraction once per model/image revision, with a 262,144-pixel and
+16,384-contour-quad budget; exceeding it reports missing model coverage.
+
+`test/native-item-geometry.test.cjs` covers the asymmetric silhouette, thickness,
+opaque side sampling, context order, both native grips through a walking cycle,
+and the actual renderer cache across hands and revision changes. The `hands`
+fixture location supplies two armoured players with identical native iron axes
+in opposite hands and the same ten-second walk / six-second rest cycle.

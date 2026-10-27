@@ -16,6 +16,7 @@ const { normalizePlayerSkinImage } = require("@viewer/player-skin");
 const { setAssets, assetUrl } = require("./viewer-utils.cjs");
 const { sampleActor } = require("./actor-motion.cjs");
 const { configureModels,itemMesh,blockMesh,textMesh,armorParts } = require("./model-renderer.cjs");
+const { playerHandBone, playerHandGripMatrix, heldItemArmRotation } = require("./native-item-geometry.cjs");
 
 const $ = (id) => document.getElementById(id);
 const viewport = $("viewport");
@@ -224,6 +225,7 @@ async function updateEquipment(actor,record) {
   const signature=JSON.stringify(equipment);
   if(actor.equipmentSignature===signature) return;
   actor.equipmentSignature=signature;
+  actor.heldHands = Object.fromEntries(["HAND","OFF_HAND"].map(slot => [playerHandBone(slot), equipment[slot]?.material && equipment[slot].material !== "minecraft:air"]));
   actor.modelError=false;
   for(const mesh of actor.equipmentMeshes ?? []) disposeMesh(mesh);
   actor.equipmentMeshes=[];
@@ -236,14 +238,13 @@ async function updateEquipment(actor,record) {
       } catch { actor.modelError=true; continue; }
     }
     if(!["HAND","OFF_HAND","HEAD"].includes(slot)) continue;
-    const bone=actor.bones[slot==="HAND"?"rightarm":slot==="OFF_HAND"?"leftarm":"head"];
+    const bone=actor.bones[slot==="HEAD"?"head":playerHandBone(slot)];
     if(!bone) continue;
     try {
       const mesh=await itemMesh(item,slot==="HEAD"?"head":slot==="HAND"?"thirdperson_righthand":"thirdperson_lefthand");
       if(actors.get(record.id)!==actor || actor.equipmentSignature!==signature) { disposeMesh(mesh); return; }
-      mesh.scale.setScalar(16);
-      if(slot==="HEAD") mesh.rotation.y=Math.PI;
-      else { mesh.position.set(slot==="HAND"?-1:1,-10,-1); mesh.rotation.set(-Math.PI/2,Math.PI,0); }
+      if(slot==="HEAD") { mesh.scale.setScalar(16); mesh.rotation.y=Math.PI; }
+      else { mesh.matrixAutoUpdate=false; mesh.matrix.copy(playerHandGripMatrix(slot,record.skin?.model==="slim")); }
       bone.add(mesh); actor.equipmentMeshes.push(mesh);
     } catch { actor.modelError=true; }
   }
@@ -354,7 +355,7 @@ function applyActorPose(actor, value, delta) {
     const pose = actorBoneRotations({ riding: Boolean(value.seated), crouching: Boolean(crouching), walk, swingProgress: 0 });
     for (const [name, rotation] of Object.entries(pose)) {
       if (!actor.bones[name]) continue;
-      const resolved = offsetBoneRotation(actor.base[name], rotation);
+      const resolved = offsetBoneRotation(actor.base[name], actor.heldHands?.[name] ? heldItemArmRotation(rotation) : rotation);
       actor.bones[name].rotation.set(resolved.x, resolved.y, resolved.z);
     }
     if (actor.bones.head) { actor.bones.head.rotation.y = actor.base.head.y - THREE.MathUtils.degToRad(value.headYawDegrees - value.yawDegrees); actor.bones.head.rotation.x = actor.base.head.x - THREE.MathUtils.degToRad(value.pitchDegrees); }

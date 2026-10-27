@@ -5,12 +5,13 @@ const { itemModelFaces } = require("@viewer/item-model-geometry");
 const { cubeVertexData } = require("@viewer/player-model");
 const { configureMinecraftTexture } = require("@viewer/viewer-color");
 const { assetUrl } = require("./viewer-utils.cjs");
+const { isGeneratedItemFallback, validateSpriteSize, generatedItemFaces, applyNativeItemContext } = require("./native-item-geometry.cjs");
 let manifest, decodeBlock;
-const models = new Map(), textures = new Map(), images = new Map(), blocks = new Map();
+const models = new Map(), textures = new Map(), images = new Map(), blocks = new Map(), generatedFaces = new Map();
 
 function configureModels(value, decode) {
   if (manifest?.revision !== value.revision) {
-    models.clear(); images.clear(); blocks.clear();
+    models.clear(); images.clear(); blocks.clear(); generatedFaces.clear();
     for (const texture of textures.values()) texture.dispose();
     textures.clear();
   }
@@ -57,9 +58,20 @@ function itemFile(item, mode) {
 
 async function itemMesh(item, requestedMode = "none") {
   const mode = String(requestedMode).toLowerCase();
-  const model = await loadModel(itemFile(item,mode));
+  const file = itemFile(item,mode), model = await loadModel(file);
+  let faces;
+  if (isGeneratedItemFallback(model)) {
+    if (!generatedFaces.has(file)) generatedFaces.set(file, (async () => {
+      const textureFile = model.textures.layer0, image = await loadImage(textureFile);
+      validateSpriteSize(image.width, image.height);
+      const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+      const context = canvas.getContext("2d"); context.drawImage(image, 0, 0);
+      return generatedItemFaces(context.getImageData(0, 0, image.width, image.height).data, image.width, image.height, textureFile);
+    })().catch(error => { generatedFaces.delete(file); throw error; }));
+    faces = await generatedFaces.get(file);
+  } else faces = itemModelFaces(model, "none");
   const grouped = new Map();
-  for (const face of itemModelFaces(model,mode)) {
+  for (const face of applyNativeItemContext(faces, model, mode)) {
     if (!grouped.has(face.texture)) grouped.set(face.texture,[]);
     grouped.get(face.texture).push(face);
   }
