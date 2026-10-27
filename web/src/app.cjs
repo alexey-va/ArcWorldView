@@ -673,6 +673,16 @@ async function poll(expectedGeneration) {
   }
 }
 
+function navigateScene(id) {
+  if (id === selectedScene?.id || !catalog.scenes.some(item => item.id === id)) return;
+  // A different world gets a fresh renderer/worker document. Reusing the loaded
+  // world's WebGL/worker lifecycle can stall both terrain and live polling.
+  // Ordinary navigation keeps HTTP caches and only replaces this viewer iframe.
+  const url = new URL(window.location.href);
+  url.searchParams.set("scene", id);
+  window.location.assign(url.href);
+}
+
 function selectScene(id) {
   if (workerFailed) return;
   const next = catalog.scenes.find((item) => item.id === id);
@@ -795,7 +805,7 @@ async function start() {
   }
 }
 
-sceneSelect.addEventListener("change", () => selectScene(sceneSelect.value));
+sceneSelect.addEventListener("change", () => navigateScene(sceneSelect.value));
 $("actor-close").addEventListener("click", () => { pinActor(null); renderer?.domElement.focus(); });
 $("actor-retry").addEventListener("click", () => { if (pinnedActor) { stopActorDetails(); $("actor-retry").hidden = true; void loadActorDetails(detailToken, generation, selectedScene.id, pinnedActor, 0); } });
 window.addEventListener("keydown", event => { if (event.key === "Escape" && pinnedActor) pinActor(null); });
