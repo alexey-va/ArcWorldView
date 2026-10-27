@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "ru.ruscrafting"
-version = "0.1.2"
+version = "0.1.3"
 description = "Live read-only browser views of selected Minecraft locations"
 
 repositories {

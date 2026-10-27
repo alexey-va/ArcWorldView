@@ -6,14 +6,16 @@ const { cubeVertexData } = require("@viewer/player-model");
 const { configureMinecraftTexture } = require("@viewer/viewer-color");
 const { assetUrl } = require("./viewer-utils.cjs");
 const { isGeneratedItemFallback, validateSpriteSize, generatedItemFaces, applyNativeItemContext } = require("./native-item-geometry.cjs");
+const { animateTexture, textureSample, frameOffset } = require("./texture-animation.cjs");
 let manifest, decodeBlock;
 const models = new Map(), textures = new Map(), images = new Map(), blocks = new Map(), generatedFaces = new Map();
+const animatedTextures = new Map();
 
 function configureModels(value, decode) {
   if (manifest?.revision !== value.revision) {
     models.clear(); images.clear(); blocks.clear(); generatedFaces.clear();
     for (const texture of textures.values()) texture.dispose();
-    textures.clear();
+    textures.clear(); animatedTextures.clear();
   }
   manifest = value; decodeBlock = decode;
 }
@@ -32,9 +34,39 @@ function texture(file) {
   if (!textures.has(file)) {
     const result = new THREE.TextureLoader().load(assetUrl(file), undefined, undefined, () => window.dispatchEvent(new Event("worldview-asset-error")));
     result.magFilter = THREE.NearestFilter; result.minFilter = THREE.NearestFilter; result.generateMipmaps = false;
+    if (manifest.textureAnimations?.[file]) {
+      animatedTextures.set(result, { animation:manifest.textureAnimations[file], blend:{value:0}, offset:{value:new THREE.Vector2()} });
+      animateTexture(result, manifest.textureAnimations[file], 0);
+    }
     configureMinecraftTexture(result, THREE); textures.set(file,result);
   }
   return textures.get(file);
+}
+
+function animateModelTextures(now) {
+  for (const [texture, state] of animatedTextures) {
+    const sample = textureSample(state.animation, now);
+    animateTexture(texture, state.animation, now, sample);
+    const next = frameOffset(state.animation, sample.nextIndex, texture.flipY);
+    state.blend.value = sample.amount;
+    state.offset.value.set(next[0] - texture.offset.x, next[1] - texture.offset.y);
+  }
+}
+
+function interpolateTexture(material) {
+  const state = animatedTextures.get(material.map);
+  if (!state?.animation.interpolate) return;
+  material.onBeforeCompile = shader => {
+    shader.uniforms.worldViewFrameBlend = state.blend;
+    shader.uniforms.worldViewFrameOffset = state.offset;
+    shader.fragmentShader = "uniform float worldViewFrameBlend;\nuniform vec2 worldViewFrameOffset;\n" + shader.fragmentShader.replace("#include <map_fragment>", `
+      #ifdef USE_MAP
+        vec4 texelColor = texture2D(map, vUv);
+        texelColor.rgb = mix(texelColor.rgb, texture2D(map, vUv + worldViewFrameOffset).rgb, worldViewFrameBlend);
+        diffuseColor *= mapTexelToLinear(texelColor);
+      #endif`);
+  };
+  material.customProgramCacheKey = () => "worldview-texture-interpolation-v1";
 }
 
 function itemFile(item, mode) {
@@ -72,19 +104,29 @@ async function itemMesh(item, requestedMode = "none") {
   } else faces = itemModelFaces(model, "none");
   const grouped = new Map();
   for (const face of applyNativeItemContext(faces, model, mode)) {
-    if (!grouped.has(face.texture)) grouped.set(face.texture,[]);
-    grouped.get(face.texture).push(face);
+    const element = model.elements[face.elementIndex];
+    const unshaded = element?.shade === false;
+    const pairedPlane = element && ["x", "y", "z"].some((_, axis) => element.from[axis] === element.to[axis] &&
+      (axis === 0 ? element.faces.east && element.faces.west : axis === 1 ? element.faces.up && element.faces.down : element.faces.north && element.faces.south));
+    const key = `${face.texture}|${unshaded}|${Boolean(pairedPlane)}`;
+    if (!grouped.has(key)) grouped.set(key, { file:face.texture, unshaded, pairedPlane, faces:[] });
+    grouped.get(key).faces.push(face);
   }
   if (!grouped.size) throw Error("Item model has no supported geometry");
   const group = new THREE.Group();
-  for (const [file,faces] of grouped) {
+  for (const { file, faces, unshaded, pairedPlane } of grouped.values()) {
     const positions = [], uvs = [];
     for (const face of faces) for (const index of [0,1,2,0,2,3]) { positions.push(...face.positions[index]); uvs.push(...face.uvs[index]); }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position",new THREE.Float32BufferAttribute(positions,3));
     geometry.setAttribute("uv",new THREE.Float32BufferAttribute(uvs,2));
     geometry.computeVertexNormals();
-    const material = new THREE.MeshLambertMaterial({ map:texture(file),alphaTest:0.1,side:THREE.DoubleSide });
+    const translucent = Boolean(manifest.textureAnimations?.[file]?.translucent);
+    const Material = unshaded ? THREE.MeshBasicMaterial : THREE.MeshLambertMaterial;
+    // Native item faces are wound inward by this adapter. A paired zero-depth
+    // plane already has both directions; drawing both twice darkens its alpha.
+    const material = new Material({ map:texture(file),alphaTest:0.1,side:pairedPlane ? THREE.BackSide : THREE.DoubleSide,transparent:translucent,depthWrite:!translucent });
+    interpolateTexture(material);
     group.add(new THREE.Mesh(geometry,material));
   }
   return group;
@@ -167,4 +209,4 @@ async function textMesh(text) {
   return mesh;
 }
 
-module.exports = { configureModels,itemMesh,blockMesh,textMesh,armorParts };
+module.exports = { configureModels,itemMesh,blockMesh,textMesh,armorParts,animateModelTextures };

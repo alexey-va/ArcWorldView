@@ -50,7 +50,7 @@ const browserImports = {
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   const packageRoots=new Set();
   const shared = { bundle: true, metafile:true,format: "iife", minify: true, platform: "browser", target: ["es2020"], nodePaths: [path.join(root, "node_modules")], plugins: [browserImports], define: { global: "globalThis", "process.platform": '"browser"', __dirname: '"."' } };
-  for (const [name, entry] of [["app", "src/app.cjs"], ["decode-worker", "src/decode-worker.cjs"], ["worker", require.resolve("prismarine-viewer/viewer/lib/worker.js")]]) {
+  for (const [name, entry] of [["app", "src/app.cjs"], ["decode-worker", "src/decode-worker.cjs"], ["worker", "src/terrain-worker.cjs"]]) {
     const result=await esbuild.build({ ...shared, entryPoints: [path.resolve(root, entry)], outfile: path.join(root, "dist", `${name}.js`) });
     for(const input of Object.keys(result.metafile.inputs)) {
       const absolute=path.resolve(input),marker=absolute.lastIndexOf(path.sep+"node_modules"+path.sep);

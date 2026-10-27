@@ -79,7 +79,14 @@ The browser polls frames at 5 Hz independently of terrain work. Two fetch/decode
 jobs refill immediately, prioritising camera-visible chunks and then context.
 Actor meshes are created in small animation-frame batches; distant pose work and
 raycasting are skipped. Unknown-sized ItemDisplays retain native mesh culling.
-Interpolation stays 250 ms behind observations and stops when updates stop.
+Interpolation keeps a 250 ms minimum buffer, adapting up to 1.25 s from source
+snapshot timestamps when capture runs more slowly. It stops at the final
+observation, without extrapolation. Display translation, scale and both native
+quaternions interpolate at display cadence alongside actor movement.
+Terrain worker bursts coalesce by section and install up to four nonempty
+sections within a 3 ms frame budget, prioritising the current view. Worker-origin
+generation tags reject obsolete results after an epoch reset; empty sections
+retire previous geometry without creating another mesh.
 Transport heartbeat, delayed snapshots and frozen cached frames are separate
 states. Immutable model/atlas/chunk URLs use the browser's normal HTTP cache;
 mutable catalog, frame, saved-terrain index and detail requests use no-store.
@@ -123,6 +130,16 @@ BlockDisplay uses the same worker mesher as terrain; plain TextDisplay uses
 native bitmap glyphs. Unsupported models are omitted with a visible coverage
 notice, never replaced by coloured cubes.
 
+Animated item texture strips retain their `.png.mcmeta` frame dimensions, order,
+durations and interpolation flag in `manifest.textureAnimations`. The browser
+uploads each strip once and advances texture matrices from its own 20-tick
+clock, independently of scene polling. Native interpolated frames blend RGB in
+the material shader while retaining the current frame's alpha. Explicit
+unshaded models and opposing faces on zero-depth planes retain their native
+material behaviour. Invalid animation metadata emits a per-texture build
+warning and leaves that texture static; it does not prevent unrelated assets
+from being built.
+
 `coverage.json` lists remaining special item renderers, entity incompatibilities and blocks outside the
 stock/supplemental renderer. Examples include banners, shulker boxes, hanging
 signs and animated compass/clock item renderers. Newer mob types outside the
@@ -151,6 +168,9 @@ Inspection locations provide close views of animals, full player armour,
 chests, a bed, a fence corner and a wall. The animal row alternates ten seconds
 of movement and six seconds at rest, so the transition can be checked as well
 as a still pose.
+Set `SNAPSHOT_HZ=1` to exercise the slower capture cadence. The portal inspection
+location uses the captured pack's three layered portal models when available;
+their texture clock continues between the fixture's snapshots.
 
 A fixture render verifies the browser and model pipeline. It does not prove
 production capture, main-thread load, live ArcCivs visibility or nginx delivery.

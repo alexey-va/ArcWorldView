@@ -94,6 +94,7 @@ const scene={id:"village",name:"Деревня · тестовая сцена",k
 const inspectionCameras = [
   ["actors","Модели и движение",[8,64,18.5],25,17,18],
   ["hands","Предметы в руках",[9.5,64,21],25,7,22],
+  ["portals","Слои и анимация порталов",[8,65,18],0,18,12],
   ["residents","Сведения о жителе",[6,64,0],205,8,30],
   ["chests_front","Сундуки · спереди",[8,63.6,4.5],205,9],
   ["chests_back","Сундуки · сзади",[8,63.6,4.5],285,6,75],
@@ -103,6 +104,7 @@ const inspectionCameras = [
 ];
 const locations=[scene,{...scene,id:"spawn",name:"Спавн · тестовая сцена",kind:"spawn",camera:{...scene.camera,azimuthDegrees:135}},...inspectionCameras.map(([id,name,target,azimuthDegrees,spanBlocks,elevationDegrees=35.264])=>({...scene,id,name:name+" · тестовая сцена",kind:"inspection",camera:{target,azimuthDegrees,spanBlocks,elevationDegrees}}))];
 const start=Date.now();
+const snapshotHz = Math.max(1, Math.min(5, Number(process.env.SNAPSHOT_HZ) || 5));
 const files=new Map(), latestActors = new Map();
 function requestedView(url, bounds) {
   const values = (url.searchParams.get("view") ?? "").split(",").map(Number);
@@ -153,7 +155,7 @@ const server=http.createServer((request,response)=>{
   }
   if(/^\/v1\/scenes\/[a-z_]+\/frame$/.test(url.pathname) && locations.some(location=>location.id===url.pathname.split('/')[3])) {
     const sceneId=url.pathname.split('/')[3],chunks=sceneChunks.get(sceneId)??sceneChunks.get("village");
-    const t=(Date.now()-start)/1000;
+    const snapshot = Math.floor((Date.now()-start)/1000*snapshotHz), t=snapshot/snapshotHz;
     const inspectHands=sceneId==="hands",inspecting=sceneId==="actors"||inspectHands||sceneId==="residents",motionTime=inspecting?Math.floor(t/16)*10+Math.min(t%16,10):t;
     const walk=(id,kind,type,name,x,z,phase=0)=>{
       const angle=motionTime*(inspecting ? .9 : .45)+phase,rx=inspecting ? 1 : 4,rz=inspecting ? .25 : 2;
@@ -169,11 +171,15 @@ const server=http.createServer((request,response)=>{
       walk("horse:1","mob","horse","Лошадь",4,21),walk("zombie:1","mob","zombie","Зомби",8,21),{...walk("player:1","player","player","Игрок в броне",12,21),equipment}
     ]:[{...walk("player:1","player","player","Игрок",-5,0),equipment:equipment.slice(0,2)},walk("npc:1","npc","player","Житель",6,0,2),walk("cow:1","mob","cow","Корова",-6,-7,1),walk("sheep:1","mob","sheep","Овца",-9,-6,3),walk("pig:1","mob","pig","Свинья",13,18,2)];
     if (sceneId === "residents") entities = [walk("npc:1","npc","player","Житель",6,0,2)];
-    const allEntities = [...entities, ...displays]; latestActors.set(sceneId, allEntities);
+    if (sceneId === "portals") entities = [2110001,2110003,2110005].filter(cmd=>manifest.items?.[`minecraft:paper|${cmd}|none`]).map((cmd,index) => display(`portal:${cmd}`,"Портал",[3+index*5,65,18],{
+      kind:"item",item:{material:"minecraft:paper",customModelData:cmd,amount:1},mode:"FIXED",
+      scale:[4+Math.sin(t)*.15,5.6+Math.sin(t)*.21,1],leftRotation:[0,0,Math.sin(Math.sin(t*.7)*.06),Math.cos(Math.sin(t*.7)*.06)]
+    }));
+    const allEntities = [...entities, ...(sceneId === "portals" ? [] : displays)]; latestActors.set(sceneId, allEntities);
     const view = requestedView(url, scene.bounds);
     const inView = [...chunks.values()].filter(chunk => chunk.x * 16 < view.maxX && (chunk.x + 1) * 16 > view.minX && chunk.z * 16 < view.maxZ && (chunk.z + 1) * 16 > view.minZ);
     const visibleEntities = allEntities.filter(actor => actor.position[0] >= view.minX && actor.position[0] < view.maxX && actor.position[2] >= view.minZ && actor.position[2] < view.maxZ);
-    return send(response,{sceneId,view,epoch:"fixture-2",seq:Math.floor(t*5),capturedAt:Date.now(),reset:!url.searchParams.has("after"),loadedChunks:inView.length,totalChunks:inView.length,entities:visibleEntities,chunks:inView.map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
+    return send(response,{sceneId,view,epoch:"fixture-2",seq:snapshot,capturedAt:start+t*1000,reset:!url.searchParams.has("after"),loadedChunks:inView.length,totalChunks:inView.length,entities:visibleEntities,chunks:inView.map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
   }
   const chunkMatch=url.pathname.match(/^\/v1\/scenes\/([a-z_]+)\/chunks\/(-?\d+)\/(-?\d+)\/1\.json$/);
   const chunk=chunkMatch&&locations.some(location=>location.id===chunkMatch[1])&&(sceneChunks.get(chunkMatch[1])??sceneChunks.get("village")).get(`${chunkMatch[2]},${chunkMatch[3]}`);

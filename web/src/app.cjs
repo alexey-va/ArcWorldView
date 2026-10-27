@@ -14,8 +14,9 @@ const { playerBodyMesh, playerBones, normalizePlayerSkeleton, applyPlayerGeometr
 const { actorBoneRotations, offsetBoneRotation } = require("@viewer/actor-pose");
 const { normalizePlayerSkinImage } = require("@viewer/player-skin");
 const { setAssets, assetUrl } = require("./viewer-utils.cjs");
-const { sampleActor } = require("./actor-motion.cjs");
-const { configureModels,itemMesh,blockMesh,textMesh,armorParts } = require("./model-renderer.cjs");
+const { sampleActor, interpolationDelay, rememberActorFrame } = require("./actor-motion.cjs");
+const { terrainInstallQueue } = require("./terrain-install-queue.cjs");
+const { configureModels,itemMesh,blockMesh,textMesh,armorParts,animateModelTextures } = require("./model-renderer.cjs");
 const { playerHandBone, playerHandGripMatrix, heldItemArmRotation } = require("./native-item-geometry.cjs");
 const { createAtmosphere } = require("./atmosphere.cjs");
 const { cameraView, cameraBounds, chunkInBounds, chunkPriority, actorPriority, frameConnection } = require("./view-priority.cjs");
@@ -30,7 +31,7 @@ const actors = new Map(), actorRecords = new Map(), loadedChunks = new Map(), pe
 const chunkDescriptors = new Map(), chunkRetries = new Map(), modelIssues = new Map();
 const terrainWarnings=new Map();
 const history = [];
-let assets, catalog, selectedScene, renderer, scene, camera, controls, terrain, terrainRoot, decoder, atmosphere;
+let assets, catalog, selectedScene, renderer, scene, camera, controls, terrain, terrainRoot, terrainInstalls, decoder, atmosphere;
 let generation = 0, epoch = null, sequence = -1, lastFrameAt = 0, lastLoopAt = 0, chunkRequestId = 0, loadedCount = 0, totalCount = 0;
 let cameraMode = "isometric", selectedActor = null, hoveredActor = null, pinnedActor = null, pollController = null, hasGeometry = false, span = 64, failedAssets = false;
 let lastTransportAt = 0, capturedAt = null, lastWorkAt = -Infinity, currentView = null, lastAcceptedView = null;
@@ -95,6 +96,7 @@ function clearWorld() {
   bootstrapController?.abort(); bootstrapController = null;
   liveFramesSeen = false; sourceState = {};
   history.length = 0;
+  terrainInstalls?.clear();
   for (const actor of actors.values()) disposeMesh(actor.mesh);
   actors.clear();
   for (const key of loadedChunks.keys()) {
@@ -166,6 +168,7 @@ function initRenderer() {
   controls.screenSpacePanning = false; controls.keyPanSpeed = 0.2; controls.verticalTranslationSpeed = 0;
   terrainRoot = new THREE.Group(); scene.add(terrainRoot);
   terrain = new WorldRenderer(terrainRoot, Math.min(4, navigator.hardwareConcurrency || 2));
+  terrainInstalls = terrainInstallQueue(terrain);
   for (const worker of terrain.workers) {
     worker.addEventListener("error", workerFailure);
     worker.addEventListener("messageerror", workerFailure);
@@ -340,10 +343,9 @@ function updateModelNotice() {
   else notice("");
 }
 
-function updateActors(records, at) {
+function updateActors(records, at, capturedAt) {
   const current = new Map(records.map(record => [record.id, record]));
-  history.push({ at, actors: current });
-  while (history.length > 8) history.shift();
+  rememberActorFrame(history, { at, capturedAt, actors:current });
   actorRecords.clear();
   for (const [id, record] of current) {
     actorRecords.set(id, record);
@@ -624,7 +626,7 @@ async function receiveFrame(frame, expectedGeneration) {
   sourceState = { stale: Boolean(frame.stale), frozen: Boolean(frame.frozen) };
   if(fresh) lastFrameAt = lastTransportAt;
   loadedCount = frame.loadedChunks; totalCount = frame.totalChunks;
-  if(fresh) updateActors(frame.entities, lastFrameAt);
+  if(fresh) updateActors(frame.entities, lastFrameAt, typeof frame.capturedAt === "number" ? frame.capturedAt : Date.parse(frame.capturedAt));
   chunkDescriptors.clear();
   for (const chunk of frame.chunks) chunkDescriptors.set(`${chunk.x},${chunk.z}`, chunk);
   for (const [key, job] of pendingChunks) if (chunkDescriptors.get(key)?.revision !== job.revision) job.controller.abort();
@@ -770,17 +772,24 @@ function animate(now) {
       const [x,,z] = key.split(",").map(Number);
       mesh.visible = visibleColumns.has(`${x / 16},${z / 16}`);
     }
+    terrainInstalls.prioritize(key => {
+      const [x,,z] = key.split(",").map(Number);
+      return chunkPriority({x:x/16,z:z/16},currentView);
+    });
   }
+  terrainInstalls.drain();
   if (currentView) syncActors();
+  const delay = interpolationDelay(history);
   for (const [id, actor] of actors) {
     if (!actor.mesh.visible) continue;
-    const value = sampleActor(history, id, now);
+    const value = sampleActor(history, id, now, delay);
     if (value) applyActorPose(actor, value, delta);
   }
   if (!hasGeometry && Object.keys(terrain.sectionMeshs).length && loadedChunks.size) {
     hasGeometry = true; $("scene-message").hidden = true; viewport.dataset.state = "ready";
   }
   if (lastTransportAt) { const status = frameConnection(now, lastTransportAt, lastFrameAt, capturedAt, Date.now(), sourceState); connection(status.state, status.text); }
+  animateModelTextures(now);
   atmosphere.render(now);
 }
 

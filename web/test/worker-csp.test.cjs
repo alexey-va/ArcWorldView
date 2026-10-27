@@ -69,4 +69,15 @@ test("built decode and terrain workers render JSON/RLE without string code gener
   const geometry = worker.messages.find(message => message.type === "geometry");
   assert.ok(geometry?.geometry.positions.length > 0, "Stock terrain mesher must emit geometry under the CSP boundary");
   assert.ok(worker.messages.some(message => message.type === "sectionFinished"));
+
+  assert.equal(geometry.worldViewGeneration,0);
+  worker.messages.length = 0;
+  // A new epoch reuses the same grid coordinates. Results must be labelled at
+  // their worker origin and the previous world's column must not survive.
+  worker.scope.onmessage({ data:{ type:"chunk", x:16, z:0, chunk:decoded.result, worldViewGeneration:1 } });
+  for (const x of [0,16]) worker.scope.onmessage({ data:{ type:"dirty", x, y:0, z:0, value:true, worldViewGeneration:1 } });
+  for (const interval of worker.intervals) interval();
+  assert.ok(worker.messages.every(message=>message.worldViewGeneration===1));
+  assert.ok(!worker.messages.some(message=>message.type==="geometry"&&message.key==="0,0,0"),"old columns are cleared before accepting the new epoch");
+  assert.ok(worker.messages.some(message=>message.type==="geometry"&&message.key==="16,0,0"));
 });

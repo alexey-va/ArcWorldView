@@ -8,6 +8,7 @@ const { execFileSync } = require("node:child_process");
 const { viewerSource } = require("./viewer-source.cjs");
 const { nativeBlockModels } = require("./native-block-models.cjs");
 const { padTerrainAtlas } = require("./terrain-atlas.cjs");
+const { textureAnimations } = require("./texture-animation-assets.cjs");
 const { installNativeEntityModels, nativeEntityCompatibility } = require("../src/native-entity-models.cjs");
 const root = path.resolve(__dirname, "..");
 const VERSION = "1.21.11";
@@ -37,7 +38,7 @@ function walk(directory, prefix = "") {
   }
   if (hash(fs.readFileSync(jar), "sha1") !== CLIENT_SHA1) throw Error("Minecraft client checksum mismatch");
   const inputDigest = crypto.createHash("sha256").update(CLIENT_SHA1).update(fs.readFileSync(path.join(root,"package-lock.json")));
-  for (const file of [__filename, ...["item-assets.cjs","native-block-models.cjs","native-block-cuboid.cjs","terrain-atlas.cjs"].map(file=>path.join(__dirname,file)),path.join(root,"src/native-entity-models.cjs"), ...["scripts/generate-viewer-assets.cjs", "scripts/build-font-glyphs.py", "src/resource-pack-block-assets.cjs", "src/item-model-assets.cjs"].map((file) => path.join(viewerRoot,file))]) inputDigest.update(fs.readFileSync(file));
+  for (const file of [__filename, ...["item-assets.cjs","native-block-models.cjs","native-block-cuboid.cjs","terrain-atlas.cjs","texture-animation-assets.cjs"].map(file=>path.join(__dirname,file)),path.join(root,"src/native-entity-models.cjs"), ...["scripts/generate-viewer-assets.cjs", "scripts/build-font-glyphs.py", "src/resource-pack-block-assets.cjs", "src/item-model-assets.cjs"].map((file) => path.join(viewerRoot,file))]) inputDigest.update(fs.readFileSync(file));
   if (packRoot) for (const file of walk(packRoot).sort()) if (/\.(json|png|mcmeta)$/.test(file)) inputDigest.update(file).update(fs.readFileSync(path.join(packRoot,file)));
   const revision = inputDigest.digest("hex").slice(0,20);
   const destination = path.resolve(option("--output", path.join(root, ".assets")));
@@ -123,6 +124,9 @@ function walk(directory, prefix = "") {
     for(const texture of Object.values(model.textures ?? {})) if(texture) required.add(texture);
   }
   for(const glyph of Object.values(font.glyphs)) required.add(glyph.url);
+  // Collect metadata before pruning generator inputs. PNG strips are private
+  // runtime resources; their small frame descriptions live in the manifest.
+  const animations = textureAnimations(output, required);
   for(const file of walk(output)) {
     if(/^native\/assets\/minecraft\/textures\/entity\/equipment\/humanoid(?:_leggings)?\/.+\.png$/.test(file)) required.add(file);
     if(!required.has(file)) fs.rmSync(path.join(output,file));
@@ -131,7 +135,7 @@ function walk(directory, prefix = "") {
     const bytes = fs.readFileSync(path.join(output, file));
     return [file, { sha256: hash(bytes), size: bytes.length, contentType: file.endsWith(".png") ? "image/png" : "application/json; charset=utf-8" }];
   }));
-  const manifest = { schemaVersion: 1, minecraftVersion: VERSION, revision, packName: packRoot ? "RusCrafting" : "Minecraft", atlas: `textures/${VERSION}.png`, blockStates: `blocksStates/${VERSION}.json`, font:"font.json", entityTextures, entityTemplateTextures, supportedEntities, unsupportedEntities, unsupportedBlocks, items: itemAssets.items, itemModels: itemAssets.itemModels, files };
+  const manifest = { schemaVersion: 1, minecraftVersion: VERSION, revision, packName: packRoot ? "RusCrafting" : "Minecraft", atlas: `textures/${VERSION}.png`, blockStates: `blocksStates/${VERSION}.json`, font:"font.json", entityTextures, entityTemplateTextures, supportedEntities, unsupportedEntities, unsupportedBlocks, items: itemAssets.items, itemModels: itemAssets.itemModels, textureAnimations: animations, files };
   fs.writeFileSync(path.join(output, "manifest.json"), JSON.stringify(manifest));
   fs.writeFileSync(path.join(destination, "current.json"), JSON.stringify({ revision, manifest: `${revision}/manifest.json` }));
   fs.writeFileSync(path.join(destination,"coverage.json"),JSON.stringify({ revision, unsupportedItems:itemAssets.unsupported,unsupportedBlocks,unsupportedEntities }));
