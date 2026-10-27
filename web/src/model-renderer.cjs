@@ -129,7 +129,9 @@ function armorParts(item, slot) {
     geometry.setIndex(Array.from({ length:6 },(_,face) => [0,1,2,2,1,3].map((vertex) => face*4+vertex)).flat());
     geometry.computeVertexNormals();
     const color=match[1]==="leather" ? item.tint ?? 0xa06540 : 0xffffff;
-    return { bone:definition.bone,mesh:new THREE.Mesh(geometry,new THREE.MeshLambertMaterial({ map,color,alphaTest:.1,side:THREE.DoubleSide })) };
+    // Match the interior-face shadow pass used for native single-sided cuboids.
+    // Rendering both depth faces makes the sun-facing armour self-shadow in r128.
+    return { bone:definition.bone,mesh:new THREE.Mesh(geometry,new THREE.MeshLambertMaterial({ map,color,alphaTest:.1,side:THREE.DoubleSide,shadowSide:THREE.BackSide })) };
   });
 }
 

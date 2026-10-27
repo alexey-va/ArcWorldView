@@ -2,6 +2,10 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { createRequire } = require("node:module");
 const THREE = require("three");
 const { createAtmosphere, chunkLanterns } = require("../src/atmosphere.cjs");
 
@@ -100,5 +104,52 @@ test("light pool follows visible lamps and releases glow on scene reset", () => 
   atmosphere.setChunk("0,0",{ x:0,z:0,minY:0,palette:["minecraft:lantern"],runs:[1,0] });
   atmosphere.render(400); atmosphere.reset();
   assert.equal(lamps.filter(light => light.intensity > 0).length,0);
+  atmosphere.dispose();
+});
+
+test("pinned shadow renderer excludes armour's outer depth faces while retaining cutout maps", () => {
+  const viewerRoot = require("../scripts/viewer-source.cjs").viewerSource();
+  const file = require.resolve("../src/model-renderer.cjs"), dependencyRequire = createRequire(file), mod = { exports:{} };
+  vm.runInNewContext(fs.readFileSync(file,"utf8"),{
+    module:mod,exports:mod.exports,
+    require:name => name === "three" ? { ...THREE,TextureLoader:class { load() { return new THREE.Texture(); } } } :
+      name.startsWith("@viewer/") ? require(path.join(viewerRoot,"src",name.slice(8)+".cjs")) :
+      name === "./viewer-utils.cjs" ? { assetUrl:file => file } : dependencyRequire(name)
+  });
+  const armorFile = "native/assets/minecraft/textures/entity/equipment/humanoid/iron.png";
+  mod.exports.configureModels({ revision:"shadow-regression",files:{ [armorFile]:{} } });
+  const armor = [...mod.exports.armorParts({ material:"minecraft:iron_helmet" },"HEAD"),...mod.exports.armorParts({ material:"minecraft:iron_chestplate" },"CHEST")].map(part => part.mesh);
+  const { atmosphere,scene,renderer,camera,sun } = setup();
+  const cutout = new THREE.Mesh(new THREE.PlaneGeometry(),new THREE.MeshLambertMaterial({ map:new THREE.Texture(),alphaTest:.1,side:THREE.DoubleSide }));
+  for (const mesh of [...armor,cutout]) { mesh.frustumCulled = false; scene.add(mesh); }
+  atmosphere.setBounds({ minX:-24,maxX:24,minY:-16,maxY:16,minZ:-24,maxZ:24 });
+
+  // Execute the pinned Three shadow adapter; replace only GPU submission. This
+  // catches r128 overriding customDepthMaterial.side from the colour material.
+  const shadowFile = path.join(path.dirname(require.resolve("three/package.json")),"src/renderers/webgl/WebGLShadowMap.js");
+  const source = fs.readFileSync(shadowFile,"utf8").replace(/^import .*;\n/gm,"").replace(/export \{ WebGLShadowMap \};/,"");
+  const ShadowMap = vm.runInNewContext(source+"\nWebGLShadowMap",{ ...THREE,vsm_frag:"",vsm_vert:"" });
+  const submitted = new Map();
+  Object.assign(renderer,{
+    state:{ setBlending(){},setScissorTest(){},viewport(){},buffers:{ color:{ setClear(){} },depth:{ setTest(){} } } },
+    getRenderTarget:() => null,getActiveCubeFace:() => 0,getActiveMipmapLevel:() => 0,setRenderTarget(){},clear(){},
+    renderBufferDirect(_camera,_scene,_geometry,material,object) { submitted.set(object,material); }
+  });
+  const shadowMap = new ShadowMap(renderer,{ update:object => object.geometry },renderer.capabilities);
+  Object.assign(shadowMap,renderer.shadowMap); renderer.shadowMap = shadowMap;
+  renderer.render = (world,view) => { world.updateMatrixWorld(true); shadowMap.render([sun],world,view); };
+  atmosphere.render(0);
+  for (const mesh of armor) {
+    const depth = submitted.get(mesh);
+    assert.equal(mesh.material.side,THREE.DoubleSide,"colour geometry stays unchanged");
+    assert.equal(depth.side,THREE.BackSide);
+    assert.equal(depth.map,mesh.material.map); assert.equal(depth.alphaTest,.1);
+  }
+  const helmet = armor[0], ray = new THREE.Raycaster(new THREE.Vector3(0,20,0),new THREE.Vector3(0,-1,0));
+  assert.equal(ray.intersectObject(helmet)[0].point.y,9,"the visible helmet still includes its outer top");
+  const depthMesh = new THREE.Mesh(helmet.geometry,submitted.get(helmet));
+  assert.equal(ray.intersectObject(depthMesh)[0].point.y,-1,"the sun-facing top cannot write its own shadow depth");
+  assert.equal(submitted.get(cutout).side,THREE.DoubleSide,"thin item/foliage cutouts keep both casting sides");
+  assert.equal(submitted.get(cutout).map,cutout.material.map);
   atmosphere.dispose();
 });

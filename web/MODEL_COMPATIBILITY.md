@@ -89,6 +89,11 @@ second except when new geometry arrives. Scene geometry is unchanged.
 Three 0.128.0 does not copy alpha maps into its default shadow-depth material.
 The owned adapter supplies alpha-test maps, asynchronous skins and skeletal
 deformation explicitly. Unlit text overlays do not cast rectangle shadows.
+Native armour cuboids retain double-sided colour faces but cast depth from
+their interior faces, matching Three's ordinary single-sided cuboid shadow
+pass. This avoids striped self-shadowing on helmet tops and shoulders without
+increasing the global shadow bias or changing terrain/foot contact. Their
+alpha maps remain active; thin item and foliage faces retain both casting sides.
 Removed meshes release their depth materials; resize reallocates the map only
 when its size changes, and disposal restores renderer state. This path uses
 packed RGBA shadow depth, so it does not require a depth-texture extension.
