@@ -21,6 +21,44 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 
 class WorldViewProtocolTest : FunSpec({
+    test("six opaque full neighbours hide interior identities without changing solid occupancy") {
+        fun block(state: String, occluding: Boolean = true, full: Boolean = true) = mockk<BlockData>().also { data ->
+            every { data.asString } returns state
+            every { data.isOccluding } returns occluding
+            every { data.isFaceSturdy(any(), any()) } returns full
+        }
+        val stone = block("minecraft:stone")
+        val diamond = block("minecraft:diamond_block")
+        val gold = block("minecraft:gold_block")
+        val air = block("minecraft:air", false)
+        val glass = block("minecraft:glass", false)
+        val slab = block("minecraft:oak_slab[type=bottom,waterlogged=false]", true, false)
+        fun encode(neighbor: BlockData): com.google.gson.JsonObject {
+            val snapshot = mockk<ChunkSnapshot>()
+            every { snapshot.getBlockData(any(), any(), any()) } answers {
+                when (Triple(firstArg<Int>(), secondArg<Int>(), thirdArg<Int>())) {
+                    Triple(8, 8, 8) -> diamond
+                    Triple(8, 9, 8) -> neighbor
+                    Triple(0, 8, 8) -> gold
+                    else -> stone
+                }
+            }
+            return JsonParser.parseString(String(ChunkEncoder.encode(snapshot, ChunkKey(0, 0),
+                SceneBounds(0, 0, 0, 16, 16, 16), 0, 16).payload.bytes)).asJsonObject
+        }
+        val hidden = encode(stone)
+        hidden.get("occludedBlocks").asInt shouldBe 14 * 14 * 14
+        val palette = hidden.getAsJsonArray("palette").map { it.asString }
+        ("minecraft:diamond_block" in palette) shouldBe false
+        ("minecraft:gold_block" in palette) shouldBe true // Unknown neighbour outside the chunk: retained.
+        val runs = hidden.getAsJsonArray("runs").map { it.asInt }.chunked(2)
+        runs.sumOf { it[0] } shouldBe 4096
+        runs.filter { palette[it[1]] != "minecraft:air" }.sumOf { it[0] } shouldBe 4096
+        for (neighbor in listOf(air, glass, slab)) {
+            ("minecraft:diamond_block" in encode(neighbor).getAsJsonArray("palette").map { it.asString }) shouldBe true
+        }
+    }
+
     test("RLE preserves negative chunk coordinates, absolute Y and bounded XZ coverage") {
         val snapshot = mockk<ChunkSnapshot>()
         val stone = mockk<BlockData>()
@@ -117,6 +155,26 @@ class WorldViewProtocolTest : FunSpec({
             request("/v1/scenes", headers = mapOf("If-None-Match" to etag)).statusCode() shouldBe 200
             request("/v1/scenes", "POST").statusCode() shouldBe 405
             request("/v1/scenes/not-configured/frame").statusCode() shouldBe 404
+            val viewer = "00000000-0000-4000-8000-000000000001"
+            request("/v1/scenes/spawn/frame?view=0,0,16,16").statusCode() shouldBe 400
+            request("/v1/scenes/spawn/frame?viewer=bad&view=0,0,16,16").statusCode() shouldBe 400
+            request("/v1/scenes/spawn/frame?viewer=$viewer&view=40,40,50,50").statusCode() shouldBe 400
+            scene.snapshot = SceneFrame("spawn", model.epoch, 1, System.currentTimeMillis(), false, 1, 1,
+                listOf(ViewerActor("npc:one", "npc", "player", "Resident", listOf(8.0, 8.0, 8.0),
+                    0f, 0f, 0f, "STANDING", 1.0, false, null, emptyList())),
+                listOf(ChunkDescriptor(0, 0, 1, "chunk")), emptyList())
+            val scoped = request("/v1/scenes/spawn/frame?after=0&viewer=$viewer&view=0,0,16,16")
+            scoped.statusCode() shouldBe 200
+            JsonParser.parseString(String(scoped.body())).asJsonObject.getAsJsonObject("view").get("maxX").asInt shouldBe 16
+            request("/v1/scenes/spawn/entities/npc%3Aone").statusCode() shouldBe 425
+            scene.informationRequests(System.currentTimeMillis()).single().payload = WirePayload.json(
+                ViewerEntityInfo("npc:one", "resident", "Resident", listOf(ViewerInfoField("profession", "Профессия", "Лесоруб")), 1))
+            val information = request("/v1/scenes/spawn/entities/npc%3Aone")
+            information.statusCode() shouldBe 200
+            JsonParser.parseString(String(information.body())).asJsonObject.getAsJsonArray("fields").single()
+                .asJsonObject.get("value").asString shouldBe "Лесоруб"
+            request("/v1/scenes/spawn/entities/private").statusCode() shouldBe 404
+            request("/v1/scenes/spawn/entities/npc%3Aone?unexpected=1").statusCode() shouldBe 400
             request("/v1/skins/${"b".repeat(64)}.png").statusCode() shouldBe 404
             request("/v1/scenes/spawn/chunks/0/0/1.json").statusCode() shouldBe 410
             request("/v1/scenes/spawn/chunks/0/0/1.json?epoch=retired").statusCode() shouldBe 410

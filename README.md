@@ -7,7 +7,7 @@
 
 ## Сервер
 
-Paper 1.21.11, Java 25, ArcCore **0.1.22** или новее. Поселения и их
+Paper 1.21.11, Java 25, ArcCore **0.1.23** или новее. Поселения и их
 пакетные жители появляются при установленном ArcCivs **0.1.97** или новее.
 Нативные сущности Paper не требуют ArcCivs. Невидимые игроки, spectator и
 игроки с metadata `vanished` не публикуются. Инвентари и чат не передаются.
@@ -49,7 +49,7 @@ npm run build
 npm test
 cd ..
 ./gradlew --no-daemon test shadowJar
-python3 scripts/verify-jar.py --arc-core-jar /absolute/path/to/ArcCore-0.1.22.jar
+python3 scripts/verify-jar.py --arc-core-jar /absolute/path/to/ArcCore-0.1.23.jar
 ```
 
 JAR включает браузерный JavaScript и шрифты. Текстуры Minecraft и серверный

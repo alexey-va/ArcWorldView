@@ -33,7 +33,13 @@
         </div>
         <div class="scene-caption" id="scene-caption" hidden><strong id="scene-name"></strong><span id="coverage"></span></div>
         <div class="zoom-controls" aria-label="Масштаб"><button id="zoom-in" type="button" aria-label="Приблизить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button><button id="zoom-out" type="button" aria-label="Отдалить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button></div>
-        <aside class="actor-info" id="actor-info" hidden><strong id="actor-name"></strong><span id="actor-kind"></span></aside>
+        <aside class="actor-info" id="actor-info" aria-labelledby="actor-name" hidden>
+          <div class="actor-heading"><div><strong id="actor-name"></strong><span id="actor-kind"></span></div><button id="actor-close" class="icon-button" type="button" aria-label="Закрыть сведения" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+          <span id="actor-select-hint">Нажми, чтобы открыть сведения</span>
+          <p id="actor-detail-state" role="status" hidden></p>
+          <dl id="actor-details"></dl>
+          <button id="actor-retry" type="button" hidden>Повторить</button>
+        </aside>
         <p class="controls-hint"><span class="desktop-hint">Мышь — поворот · правая кнопка — перемещение · колесо — масштаб</span><span class="touch-hint">Один палец — поворот · два — перемещение и масштаб</span></p>
         <p class="scene-notice" id="scene-notice" hidden></p>
       </section>

@@ -30,6 +30,7 @@ import ru.arc.observability.RuntimeHealthContribution
 import ru.arc.observability.RuntimeHealthState
 import ru.arc.paper.api.ArcSceneBounds
 import ru.arc.paper.api.ArcSceneObservationService
+import ru.arc.paper.api.ArcSceneEntityInfoService
 import ru.arc.paper.runtime.PaperPluginRuntime
 import java.util.UUID
 import java.util.concurrent.CancellationException
@@ -59,6 +60,7 @@ class WorldViewCapture(
     private val worker: BoundedAsyncExecutor,
     private val assets: WorldViewAssets,
     private val model: WorldViewReadModel,
+    private val entityInformation: ArcSceneEntityInfoService? = null,
 ) : AutoCloseable, Listener {
     private var nanoTime = LongSupplier(System::nanoTime)
     internal constructor(plugin: JavaPlugin, runtime: PaperPluginRuntime, settings: WorldViewSettings,
@@ -74,9 +76,11 @@ class WorldViewCapture(
         val hot = linkedSetOf<ChunkKey>()
         var chunkCursor = 0
         var discoveryCursor = 0
+        var playerCursor = 0
         var frameAt = 0L
         val framePending = AtomicBoolean()
-        @Volatile var previousChunks = emptySet<ChunkKey>()
+        var informationAt = 0L
+        val informationPending = AtomicBoolean()
     }
     private data class NativeActor(val entity: Entity, var worldId: UUID, var captured: CapturedActor? = null, var at: Long = 0L)
     private data class ChunkResult(val sceneId: String, val fence: Fence, val key: ChunkKey,
@@ -107,9 +111,9 @@ class WorldViewCapture(
     private var catalogAt = 0L
     private var healthAt = 0L
     private var tick = 0L
-    private var sceneCursor = 0
-    private var playerCursor = 0
-    private var entityDiscoveryCursor = 0
+    private val chunkLane = CaptureSceneLane()
+    private val playerLane = CaptureSceneLane()
+    private val entityLane = CaptureSceneLane()
     private val discoveryOffsets = hashMapOf<Pair<UUID, ChunkKey>, Int>()
     private var revision = 0L
     private var cachedBytes = 0L
@@ -156,14 +160,19 @@ class WorldViewCapture(
             errors.poll()?.let { warn(now, it) }
             if (now >= catalogAt && budget.hasTime(nanoTime.asLong)) refreshCatalog(now)
             if (catalogDirty) publishCatalog()
-            val active = captureActiveScenes(scenes.mapValues { it.value.published.lastAccess.get() }, now,
-                settings.idleMillis, min(settings.activeScenes, 2)).mapNotNull { scenes[it] }
+            val access = scenes.mapValues { it.value.published.lastAccess.get() }
+            val eligible = captureActiveScenes(access, now, settings.idleMillis, scenes.size)
+            chunkLane.retain(eligible); playerLane.retain(eligible); entityLane.retain(eligible)
+            val active = captureActiveScenes(access, now, settings.idleMillis,
+                min(settings.activeScenes, 2), tick).mapNotNull { scenes[it] }
             val activeWorlds = active.mapNotNullTo(hashSetOf()) { it.worldId }
-            nativeActors.entries.removeIf { it.value.worldId !in activeWorlds }
+            val retainedWorlds = eligible.mapNotNullTo(hashSetOf()) { scenes[it]?.worldId }
+            nativeActors.entries.removeIf { it.value.worldId !in retainedWorlds }
             if (active.isNotEmpty()) {
                 // Frames consume detached cached actors first. Alternate native lane priority so
                 // expensive actor captures cannot starve terrain, or a snapshot starve actors.
                 captureFrames(active, budget, now)
+                captureInformation(active, budget, now)
                 discoverHints(activeWorlds, budget)
                 discoverPlayers(active, budget)
                 if (tick % 2L == 0L) captureChunks(active, budget, now)
@@ -240,14 +249,18 @@ class WorldViewCapture(
     }
 
     private fun discoverPlayers(active: List<Scene>, budget: CaptureTickBudget) {
-        if (!budget.hasTime(nanoTime.asLong)) return
-        val state = active[(tick % active.size).toInt()]
-        val world = state.worldId?.let(plugin.server::getWorld) ?: return
-        val players = world.players
-        if (players.isEmpty()) return
-        repeat(min(players.size, min(16, (min(settings.entitySamples, 96) / 8).coerceAtLeast(1)))) {
-            if (!budget.claimEntity(nanoTime.asLong)) return
-            remember(players[Math.floorMod(playerCursor++, players.size)], world.uid)
+        for (id in playerLane.order(active.map { it.published.definition.id })) {
+            if (!budget.hasTime(nanoTime.asLong)) return
+            val state = scenes[id] ?: continue
+            playerLane.attempted(id)
+            val world = state.worldId?.let(plugin.server::getWorld) ?: continue
+            val players = world.players
+            if (players.isEmpty()) continue
+            repeat(min(players.size, min(16, (min(settings.entitySamples, 96) / 8).coerceAtLeast(1)))) {
+                if (!budget.claimEntity(nanoTime.asLong)) return
+                remember(players[Math.floorMod(state.playerCursor++, players.size)], world.uid)
+            }
+            return
         }
     }
 
@@ -265,6 +278,7 @@ class WorldViewCapture(
 
     private fun remember(entity: Entity, world: UUID) {
         val id = entity.uniqueId
+        nativeActors[id]?.takeIf { it.worldId != world }?.let { it.worldId = world; it.captured = null; it.at = 0 }
         if (id !in nativeActors) {
             if (nativeActors.size >= min(settings.entityLimit * 2, 1024)) nativeActors.remove(nativeActors.keys.first())
             nativeActors[id] = NativeActor(entity, world)
@@ -272,20 +286,21 @@ class WorldViewCapture(
     }
 
     private fun refreshActors(active: List<Scene>, budget: CaptureTickBudget, now: Long) {
-        val count = nativeActors.size
-        repeat(count) {
+        val worlds = active.mapNotNullTo(hashSetOf()) { it.worldId }
+        val candidates = nativeActors.entries.filter { it.value.worldId in worlds }.map { it.key to it.value }
+        for ((id, known) in candidates) {
             // Reserve a short discovery lane so a full actor cache cannot starve newly loaded mobs.
             val reserve = min(16, min(settings.entitySamples, 96) / 4)
             if (budget.entityCount >= min(settings.entitySamples, 96) - reserve || !budget.claimEntity(nanoTime.asLong)) return
-            val entry = nativeActors.entries.firstOrNull() ?: return
-            val id = entry.key; val known = entry.value
+            if (nativeActors[id] !== known) continue
             nativeActors.remove(id)
             val entity = known.entity
-            if (!entity.isValid || entity.isDead) return@repeat
+            if (!entity.isValid || entity.isDead) continue
             val world = entity.world.uid
-            val actor = ActorWire.native(entity) ?: return@repeat
+            if (known.worldId != world) { known.worldId = world; known.captured = null; known.at = 0 }
+            val actor = ActorWire.native(entity) ?: continue
             val owners = active.filter { it.worldId == world && it.published.definition.bounds.contains(actor.position[0], actor.position[1], actor.position[2]) }
-            if (owners.isEmpty()) return@repeat
+            if (owners.isEmpty()) { nativeActors[id] = known; continue }
             known.worldId = world; known.captured = actor; known.at = now
             nativeActors[id] = known
             val key = ChunkKey(floor(actor.position[0]).toInt() shr 4, floor(actor.position[2]).toInt() shr 4)
@@ -298,9 +313,12 @@ class WorldViewCapture(
 
     private fun discoverEntities(active: List<Scene>, budget: CaptureTickBudget) {
         if (!budget.hasTime(nanoTime.asLong) || budget.entityCount >= min(settings.entitySamples, 96)) return
-        val owner = active[Math.floorMod(entityDiscoveryCursor++, active.size)]
+        val id = entityLane.order(active.map { it.published.definition.id }).firstOrNull() ?: return
+        val owner = scenes[id] ?: return
+        entityLane.attempted(id)
         val world = owner.worldId?.let(plugin.server::getWorld) ?: return
-        val keys = owner.slots.keys.toList()
+        val requested = owner.published.requestedViews(System.currentTimeMillis())
+        val keys = owner.slots.keys.filter { key -> requested.any { it.intersects(key) } }
         repeat(keys.size) {
             if (!budget.hasTime(nanoTime.asLong)) return
             val key = keys[Math.floorMod(owner.discoveryCursor++, keys.size)]
@@ -327,7 +345,7 @@ class WorldViewCapture(
             if (owner.framePending.get() || tick < owner.frameAt || !budget.hasTime(nanoTime.asLong) || !capacity()) continue
             val world = owner.worldId ?: continue
             val definition = owner.published.definition
-            val b = definition.bounds
+            val b = owner.published.captureBounds(now)
             val observed = observer.entities(ArcSceneBounds(world, b.minX.toDouble(), b.minY.toDouble(), b.minZ.toDouble(),
                 b.maxX.toDouble(), b.maxY.toDouble(), b.maxZ.toDouble()), settings.entityLimit).map(ActorWire::observed)
             val actors = (observed + nativeActors.values.asSequence().filter { it.worldId == world && now - it.at <= 2_000 }
@@ -341,8 +359,9 @@ class WorldViewCapture(
             val descriptors = owner.published.chunks.entries.sortedWith(compareBy({ it.key.z }, { it.key.x })).map { (key, value) ->
                 ChunkDescriptor(key.x, key.z, value.revision, captureChunkUrl(definition.id, key, value.revision, model.epoch))
             }
-            val keys = descriptors.mapTo(hashSetOf()) { ChunkKey(it.x, it.z) }
-            val removed = owner.previousChunks.minus(keys).toList()
+            // Missing snapshots can be unloaded chunks or RAM-cache eviction, never proof
+            // of deleted world geometry. Real clearance is a new all-air chunk revision.
+            val removed = emptyList<ChunkKey>()
             val seq = sequence.incrementAndGet()
             val fence = owner.fence
             fence.frame.set(seq)
@@ -357,7 +376,8 @@ class WorldViewCapture(
                         val payload = WirePayload.json(frame)
                         synchronized(this.publication) {
                             if (current() && fence.active.get() && fence.frame.get() == seq && model.scenes[definition.id] === publication) {
-                                publication.frame = payload; owner.previousChunks = keys; failed = false
+                                publication.snapshot = frame
+                                publication.frame = payload; failed = false
                             }
                         }
                     } finally { owner.framePending.set(false) }
@@ -369,12 +389,24 @@ class WorldViewCapture(
 
     private fun captureChunks(active: List<Scene>, budget: CaptureTickBudget, now: Long) {
         if (!capacity() || !budget.hasTime(nanoTime.asLong)) return
-        repeat(active.size) {
-            val owner = active[Math.floorMod(sceneCursor++, active.size)]
-            val world = owner.worldId?.let(plugin.server::getWorld) ?: return@repeat
+        for (id in chunkLane.order(active.map { it.published.definition.id })) {
+            if (!budget.hasTime(nanoTime.asLong) || !capacity()) return
+            val owner = scenes[id] ?: continue
+            chunkLane.attempted(id)
+            val world = owner.worldId?.let(plugin.server::getWorld) ?: continue
+            val requested = owner.published.requestedViews(now)
+            val needed = owner.slots.keys.filter { key -> requested.any { it.intersects(key) } }
+            // A cold viewport starts at its centre rather than sweeping rows from the scene edge.
+            val missing = needed.filter { !owner.published.chunks.containsKey(it) }.sortedBy { key ->
+                requested.minOf { view ->
+                    val x = key.x * 16.0 + 8 - (view.minX.toDouble() + view.maxX) / 2
+                    val z = key.z * 16.0 + 8 - (view.minZ.toDouble() + view.maxZ) / 2
+                    x * x + z * z
+                }
+            }
             val hotDue = owner.hot.filter { now - (owner.slots[it]?.capturedAt ?: 0L) >= min(settings.refreshMillis, 1_000) }.toSet()
-            val ordered = (owner.urgent + hotDue +
-                rotate(owner.slots.keys.toList(), owner.chunkCursor++)).distinct()
+            val ordered = (missing + owner.urgent + hotDue + rotate(needed, owner.chunkCursor++))
+                .distinct().filter { key -> requested.any { it.intersects(key) } }
             for (key in ordered) {
                 if (!budget.hasTime(nanoTime.asLong) || !capacity()) return
                 val slot = owner.slots.getValue(key)
@@ -397,6 +429,38 @@ class WorldViewCapture(
                     }) slot.failed()
                 return
             }
+        }
+    }
+
+    private fun captureInformation(active: List<Scene>, budget: CaptureTickBudget, now: Long) {
+        for (owner in active) {
+            if (now < owner.informationAt || owner.informationPending.get() ||
+                !budget.hasTime(nanoTime.asLong) || !capacity()) continue
+            val world = owner.worldId ?: continue
+            val requests = owner.published.informationRequests(now)
+            if (requests.isEmpty()) continue
+            owner.informationAt = now + 1_000
+            val bounds = owner.published.captureBounds(now)
+            val ids = requests.mapTo(linkedSetOf()) { it.id }
+            val values = entityInformation?.information(ArcSceneBounds(world,
+                bounds.minX.toDouble(), bounds.minY.toDouble(), bounds.minZ.toDouble(),
+                bounds.maxX.toDouble(), bounds.maxY.toDouble(), bounds.maxZ.toDouble()), ids, 64)
+                ?.associateBy { it.entityId }.orEmpty()
+            val actors = owner.published.snapshot?.entities?.associateBy { it.id }.orEmpty()
+            val detached = requests.mapNotNull { request ->
+                val actor = actors[request.id] ?: return@mapNotNull null
+                val info = values[request.id]
+                request to ViewerEntityInfo(request.id, info?.kind ?: actor.kind, info?.title ?: actor.name,
+                    info?.fields?.map { ViewerInfoField(it.key, it.label, it.value) }.orEmpty(), now)
+            }
+            owner.informationPending.set(true)
+            if (!submit {
+                    try {
+                        val payloads = detached.map { (request, info) -> request to WirePayload.json(info) }
+                        if (current() && owner.fence.active.get()) payloads.forEach { (request, payload) -> request.payload = payload }
+                    } finally { owner.informationPending.set(false) }
+                }) owner.informationPending.set(false)
+            return // At most one bounded public-source query in the aggregate Main budget.
         }
     }
 
@@ -526,9 +590,24 @@ class WorldViewCapture(
     }
 }
 
-internal fun captureActiveScenes(access: Map<String, Long>, now: Long, idleMillis: Long, limit: Int): List<String> =
-    access.entries.asSequence().filter { it.value > 0 && now - it.value <= idleMillis }
-        .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key }).take(limit).map { it.key }.toList()
+internal fun captureActiveScenes(access: Map<String, Long>, now: Long, idleMillis: Long, limit: Int,
+    cursor: Long = 0): List<String> {
+    val eligible = access.entries.asSequence().filter { it.value > 0 && now - it.value <= idleMillis }
+        .map { it.key }.sorted().toList()
+    if (eligible.isEmpty() || limit <= 0) return emptyList()
+    val start = Math.floorMod(cursor, eligible.size.toLong()).toInt()
+    return (eligible.drop(start) + eligible.take(start)).take(limit)
+}
+
+/** Resource service order is independent from the rotating admission phase. */
+internal class CaptureSceneLane {
+    private val attempted = hashMapOf<String, Long>()
+    private var sequence = 0L
+    fun order(active: Collection<String>): List<String> = active.sortedWith(
+        compareBy<String> { attempted[it] ?: Long.MIN_VALUE }.thenBy { it })
+    fun attempted(id: String) { attempted[id] = ++sequence }
+    fun retain(eligible: Collection<String>) { attempted.keys.retainAll(eligible.toSet()) }
+}
 
 internal fun captureChunkUrl(sceneId: String, key: ChunkKey, revision: Long, epoch: String): String =
     "v1/scenes/$sceneId/chunks/${key.x}/${key.z}/$revision.json?epoch=$epoch"

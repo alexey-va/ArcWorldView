@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import ru.arc.core.BoundedAsyncExecutor
 import java.net.InetSocketAddress
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -17,6 +19,7 @@ class WorldViewHttp(settings: WorldViewSettings, private val model: WorldViewRea
         catch (failure: Throwable) { server.stop(0); throw failure }
     private val static = ConcurrentHashMap<String, WirePayload>()
     private val closed = AtomicBoolean(false)
+    private val UUID_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
     val port: Int get() = server.address.port
     @Volatile private var drain = CompletableFuture.completedFuture(Unit)
     init {
@@ -54,7 +57,22 @@ class WorldViewHttp(settings: WorldViewSettings, private val model: WorldViewRea
                 parts.size == 4 && parts[0] == "v1" && parts[1] == "scenes" && parts[3] == "frame" -> {
                     val id = parts[2]
                     if (!validScene(id) || !model.scenes.containsKey(id)) return error(exchange, 404, "scene-not-found")
-                    respond(exchange, model.frame(id) ?: return error(exchange, 425, "warming"), false)
+                    val query = try { frameQuery(exchange.requestURI.rawQuery) }
+                        catch (_: IllegalArgumentException) { return error(exchange, 400, "invalid-viewport") }
+                    val payload = try { model.frame(id, query.first, query.second) }
+                        catch (_: IllegalArgumentException) { return error(exchange, 400, "invalid-viewport") }
+                        catch (_: IllegalStateException) { return error(exchange, 429, "viewport-capacity") }
+                    respond(exchange, payload ?: return error(exchange, 425, "warming"), false)
+                }
+                parts.size == 5 && parts[0] == "v1" && parts[1] == "scenes" && parts[3] == "entities" -> {
+                    val scene = parts[2]; val entity = parts[4]
+                    if (!validScene(scene) || !model.scenes.containsKey(scene) || !validScene(entity))
+                        return error(exchange, 404, "entity-not-found")
+                    if (!exchange.requestURI.rawQuery.isNullOrEmpty()) return error(exchange, 400, "unexpected-query")
+                    val payload = try { model.information(scene, entity) }
+                        catch (_: NoSuchElementException) { return error(exchange, 404, "entity-not-found") }
+                        catch (_: IllegalStateException) { return error(exchange, 429, "entity-info-capacity") }
+                    respond(exchange, payload ?: return error(exchange, 425, "warming"), false)
                 }
                 parts.size == 7 && parts[0] == "v1" && parts[1] == "scenes" && parts[3] == "chunks" -> {
                     val id = parts[2]
@@ -96,6 +114,24 @@ class WorldViewHttp(settings: WorldViewSettings, private val model: WorldViewRea
             if (!closed.get()) warning("Viewer HTTP failed: ${failure.javaClass.simpleName}")
             runCatching { error(exchange, 503, "temporarily-unavailable") }
         } finally { exchange.close() }
+    }
+
+    private fun frameQuery(raw: String?): Pair<String?, SceneView?> {
+        if (raw.isNullOrEmpty()) return null to null
+        require(raw.length <= 1024)
+        val values = linkedMapOf<String, String>()
+        for (part in raw.split('&')) {
+            val pair = part.split('=', limit = 2)
+            require(pair.size == 2)
+            val key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8)
+            val value = URLDecoder.decode(pair[1], StandardCharsets.UTF_8)
+            require(key in setOf("after", "viewer", "view") && key !in values)
+            values[key] = value
+        }
+        val viewer = values["viewer"]?.also { require(UUID_PATTERN.matches(it)) }
+        val view = values["view"]?.let(SceneView::parse)
+        require(view == null || viewer != null)
+        return viewer to view
     }
 
     private fun respond(exchange: HttpExchange, payload: WirePayload, immutable: Boolean) {

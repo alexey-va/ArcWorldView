@@ -11,6 +11,7 @@ import ru.arc.logging.paper.PaperLoggingPlatform
 import ru.arc.observability.RuntimeHealthContribution
 import ru.arc.observability.RuntimeHealthState
 import ru.arc.paper.api.ArcSceneObservationService
+import ru.arc.paper.api.ArcSceneEntityInfoService
 import ru.arc.paper.runtime.PaperPluginHotload
 import ru.arc.paper.runtime.PaperPluginRuntime
 import ru.arc.text.LocaleCatalog
@@ -50,6 +51,7 @@ class ArcWorldViewPlugin : JavaPlugin() {
             saveDefaultConfig()
             val settings = WorldViewSettings.load(config, dataPath)
             val observer = requireNotNull(server.servicesManager.load(ArcSceneObservationService::class.java)) { "ArcCore 0.1.22 scene observer is required" }
+            val information = requireNotNull(server.servicesManager.load(ArcSceneEntityInfoService::class.java)) { "ArcCore 0.1.23 public scene information is required" }
             val executor = BoundedAsyncExecutor("ArcWorldView-capture", settings.workerThreads, settings.workerQueue).also { worker = it }
             lifecycle.own(AutoCloseable { workerDrain = executor.closeAsync() })
             val token = lifecycle.tasks.token()
@@ -61,7 +63,7 @@ class ArcWorldViewPlugin : JavaPlugin() {
                 lifecycle.tasks.callSync(token) {
                     if (stopped || runtime !== lifecycle) { assets.close(); return@callSync }
                     lifecycle.own(assets)
-                    val capture = lifecycle.own(WorldViewCapture(this, lifecycle, settings, observer, executor, assets, model))
+                    val capture = lifecycle.own(WorldViewCapture(this, lifecycle, settings, observer, executor, assets, model, information))
                     lifecycle.registerHealth("capture", capture::health)
                     capture.start().whenComplete { _, startFailure -> lifecycle.tasks.runSync(token) {
                         if (startFailure != null) { fail(lifecycle, startFailure); return@runSync }

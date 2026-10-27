@@ -22,7 +22,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #connection-dot { width: 6px; height: 6px; border-radius: 50%; background: #89958e; }
 .connection[data-state="live"] #connection-dot { background: #9bb087; }
 .connection[data-state="live"] { color: #bed0ad; }
-.connection[data-state="stale"] #connection-dot, .connection[data-state="error"] #connection-dot { background: #e2a96b; }
+.connection[data-state="stale"] #connection-dot, .connection[data-state="delayed"] #connection-dot, .connection[data-state="error"] #connection-dot { background: #e2a96b; }
 .view-modes { display: flex; align-self: stretch; align-items: center; gap: 2px; }
 .view-modes button { padding: 0 13px; font-size: 13px; }
 .view-modes [aria-pressed="true"] { background: #29332f; color: #f4f6f2; }
@@ -43,9 +43,23 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .zoom-controls button + button { border-top: 1px solid #34413b; }
 .controls-hint { position: absolute; bottom: 15px; left: 20px; margin: 0; padding: 8px 12px; background: rgba(12,19,15,.9); color: #c3cec6; font-size: 12px; line-height: 1.5; pointer-events: none; }
 .touch-hint { display: none; }
-.actor-info { position: absolute; top: 18px; right: 20px; display: grid; gap: 5px; min-width: 150px; max-width: 250px; padding: 14px 18px; background: #111b16; pointer-events: none; }
+.actor-info { position: absolute; top: 18px; right: 20px; display: grid; gap: 10px; min-width: 180px; max-width: 300px; max-height: calc(100% - 36px); overflow: auto; padding: 14px 18px; background: #111b16; box-shadow: 0 8px 24px rgba(0,0,0,.18); pointer-events: none; scrollbar-color: #56665b #111b16; scrollbar-width: thin; }
+.actor-info[data-pinned="true"] { width: 300px; pointer-events: auto; }
+.actor-heading { display: flex; align-items: flex-start; gap: 8px; }
+.actor-heading > div { display: grid; flex: 1; gap: 5px; min-width: 0; }
+.actor-heading .icon-button { width: 36px; min-height: 36px; flex-basis: 36px; margin: -8px -10px -6px 0; }
+#actor-select-hint { font-size: 11px; color: #b4c1b6; }
+#actor-detail-state { margin: 0; color: #b4c1b6; font-size: 13px; line-height: 1.5; }
+#actor-details { display: grid; grid-template-columns: minmax(80px,.8fr) minmax(0,1.2fr); gap: 10px 16px; margin: 4px 0 0; font-size: 13px; line-height: 1.45; }
+#actor-details:empty { display: none; }
+#actor-details dt { color: #b4c1b6; }
+#actor-details dd { margin: 0; overflow-wrap: anywhere; }
 .actor-info strong { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .actor-info span { font-size: 12px; color: #b4c1b6; }
 .scene-notice { position: absolute; left: 50%; bottom: 58px; transform: translateX(-50%); margin: 0; max-width: calc(100% - 40px); padding: 10px 16px; background: #18211c; color: #d9dfd7; font-size: 12px; text-align: center; }
 @media (max-width: 680px) { .world-toolbar { padding: 8px 12px; gap: 4px; min-height: 96px; flex-wrap: wrap; } .location-control { flex-basis: 60%; max-width: none; } .connection { margin: 0 0 0 auto; justify-content: flex-end; flex-basis: 20%; font-size: 12px; } .view-modes { margin-right: auto; } .view-modes button { font-size: 12px; min-height: 38px; padding: 0 12px; } .icon-button { min-height: 38px; } .scene-caption { top: 12px; left: 12px; padding: 10px 12px; } .scene-caption strong { font-size: 12px; } .scene-caption span { font-size: 12px; } .actor-info { top: auto; right: 12px; bottom: 164px; min-width: 120px; } .zoom-controls { right: 12px; bottom: 48px; } .controls-hint { bottom: 12px; left: 12px; font-size: 12px; max-width: calc(100% - 24px); } .desktop-hint { display: none; } .touch-hint { display: inline; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+
+@media (max-width: 680px) { .actor-info[data-pinned="true"] { left: 12px; right: 12px; bottom: 12px; top: auto; width: auto; max-width: none; max-height: 58%; z-index: 3; padding: 16px; } .viewport:has(.actor-info[data-pinned="true"]:not([hidden])) .controls-hint { visibility: hidden; } .connection[data-state="delayed"] { white-space: normal; max-width: 140px; } }
+
+#actor-retry { border: 1px solid var(--line); padding: 0 14px; justify-self: start; }

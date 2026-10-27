@@ -94,6 +94,7 @@ const scene={id:"village",name:"Деревня · тестовая сцена",k
 const inspectionCameras = [
   ["actors","Модели и движение",[8,64,18.5],25,17,18],
   ["hands","Предметы в руках",[9.5,64,21],25,7,22],
+  ["residents","Сведения о жителе",[6,64,0],205,8,30],
   ["chests_front","Сундуки · спереди",[8,63.6,4.5],205,9],
   ["chests_back","Сундуки · сзади",[8,63.6,4.5],285,6,75],
   ["bed","Кровать",[-14.5,63.5,5],135,7],
@@ -102,7 +103,13 @@ const inspectionCameras = [
 ];
 const locations=[scene,{...scene,id:"spawn",name:"Спавн · тестовая сцена",kind:"spawn",camera:{...scene.camera,azimuthDegrees:135}},...inspectionCameras.map(([id,name,target,azimuthDegrees,spanBlocks,elevationDegrees=35.264])=>({...scene,id,name:name+" · тестовая сцена",kind:"inspection",camera:{target,azimuthDegrees,spanBlocks,elevationDegrees}}))];
 const start=Date.now();
-const files=new Map();
+const files=new Map(), latestActors = new Map();
+function requestedView(url, bounds) {
+  const values = (url.searchParams.get("view") ?? "").split(",").map(Number);
+  if (values.length !== 4 || !values.every(Number.isSafeInteger)) return { minX: bounds.minX, minZ: bounds.minZ, maxX: bounds.maxX, maxZ: bounds.maxZ };
+  const [x0,z0,x1,z1] = values;
+  return { minX: Math.max(bounds.minX,x0), minZ: Math.max(bounds.minZ,z0), maxX: Math.min(bounds.maxX,x1), maxZ: Math.min(bounds.maxZ,z1) };
+}
 const display=(id,name,position,content)=>({ id,kind:"display",type:`${content.kind}_display`,name,position,yawDegrees:0,headYawDegrees:0,pitchDegrees:0,scale:1,display:{ translation:[0,0,0],scale:[1,1,1],leftRotation:[0,0,0,1],rightRotation:[0,0,0,1],billboard:"FIXED",...content } });
 const displays=[display("block:1","Бочка",[4,63,9],{kind:"block",blockData:"minecraft:barrel[facing=north,open=false]"}),display("text:1","Колодец",[0,69,7],{kind:"text",text:"Колодец",billboard:"VERTICAL"})];
 if(manifest.items?.["minecraft:paper|10837|none"]) displays.push(display("ia:1","Точильный станок",[-6,63.5717531435684543,7],{kind:"item",item:{material:"minecraft:paper",customModelData:10837,amount:1},mode:"NONE"}));
@@ -122,24 +129,51 @@ const server=http.createServer((request,response)=>{
     if(file.startsWith(websiteRoot+path.sep)&&fs.existsSync(file)) return send(response,fs.readFileSync(file),({".html":"text/html; charset=utf-8",".js":"application/javascript",".css":"text/css",".png":"image/png",".woff2":"font/woff2"})[path.extname(file)]??"application/octet-stream");
   }
   if(url.pathname==="/v1/scenes")return send(response,{schemaVersion:1,minecraftVersion:"1.21.11",assetRevision:revision,assetsUrl:`assets/${revision}/manifest.json`,scenes:locations});
+  const terrainMatch = url.pathname.match(/^\/v1\/scenes\/([a-z_]+)\/terrain$/);
+  if (terrainMatch && locations.some(location => location.id === terrainMatch[1])) {
+    const sceneId = terrainMatch[1], view = requestedView(url, scene.bounds);
+    const chunks = sceneChunks.get(sceneId) ?? sceneChunks.get("village");
+    const descriptors = [...chunks.values()].filter(chunk => chunk.x * 16 < view.maxX && (chunk.x + 1) * 16 > view.minX && chunk.z * 16 < view.maxZ && (chunk.z + 1) * 16 > view.minZ)
+      .map(({x,z}) => ({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`}));
+    return send(response,{sceneId,epoch:"fixture-2",capturedAt:Date.now()-60000,stale:true,view,chunks:descriptors,loadedChunks:descriptors.length,totalChunks:descriptors.length});
+  }
+  const detailMatch = url.pathname.match(/^\/v1\/scenes\/([a-z_]+)\/entities\/([^/]+)$/);
+  if (detailMatch) {
+    const id = decodeURIComponent(detailMatch[2]), actor = latestActors.get(detailMatch[1])?.find(actor => actor.id === id);
+    if (!actor) { response.writeHead(404); response.end(); return; }
+    const fields = actor.kind === "npc" ? [
+      { key: "profession", label: "Профессия", value: "Плотник" },
+      { key: "activity", label: "Занятие", value: "Прогуливается" },
+      { key: "settlement", label: "Поселение", value: "Тестовая деревня" },
+      { key: "home", label: "Дом", value: "Дом у колодца" },
+      { key: "workplace", label: "Рабочее место", value: "Мастерская" },
+      { key: "health", label: "Здоровье", value: "20 / 20" }
+    ] : [];
+    return send(response, { id, kind: actor.kind, title: actor.name, fields, capturedAt: Date.now() });
+  }
   if(/^\/v1\/scenes\/[a-z_]+\/frame$/.test(url.pathname) && locations.some(location=>location.id===url.pathname.split('/')[3])) {
     const sceneId=url.pathname.split('/')[3],chunks=sceneChunks.get(sceneId)??sceneChunks.get("village");
     const t=(Date.now()-start)/1000;
-    const inspectHands=sceneId==="hands",inspecting=sceneId==="actors"||inspectHands,motionTime=inspecting?Math.floor(t/16)*10+Math.min(t%16,10):t;
+    const inspectHands=sceneId==="hands",inspecting=sceneId==="actors"||inspectHands||sceneId==="residents",motionTime=inspecting?Math.floor(t/16)*10+Math.min(t%16,10):t;
     const walk=(id,kind,type,name,x,z,phase=0)=>{
       const angle=motionTime*(inspecting ? .9 : .45)+phase,rx=inspecting ? 1 : 4,rz=inspecting ? .25 : 2;
       const yaw=Math.atan2(-Math.cos(angle)*rx,-Math.sin(angle)*rz)*180/Math.PI;
       return {id,kind,type,name,position:[x+Math.sin(angle)*rx,63,z+Math.cos(angle)*rz],yawDegrees:yaw,headYawDegrees:yaw,pitchDegrees:0,pose:"STANDING",scale:1,seated:false,skin:type==="player"?{url:`assets/${revision}/native/assets/minecraft/textures/entity/player/wide/steve.png`,model:"default"}:null,equipment:{}};
     };
     const equipment=[{slot:"HAND",material:"minecraft:iron_axe",amount:1},...(["HEAD","CHEST","LEGS","FEET"].map((slot,index)=>({slot,material:`minecraft:iron_${["helmet","chestplate","leggings","boots"][index]}`,amount:1})))];
-    const entities=inspectHands?[
+    let entities=inspectHands?[
       {...walk("hand:right","player","player","Правая рука",8,21),equipment},
       {...walk("hand:left","player","player","Левая рука",11,21),equipment:equipment.map(item=>item.slot==="HAND"?{...item,slot:"OFF_HAND"}:item)}
     ]:inspecting?[
       walk("cow:1","mob","cow","Корова",3,16),walk("sheep:1","mob","sheep","Овца",6,16),walk("pig:1","mob","pig","Свинья",9,16),walk("chicken:1","mob","chicken","Курица",12,16),
       walk("horse:1","mob","horse","Лошадь",4,21),walk("zombie:1","mob","zombie","Зомби",8,21),{...walk("player:1","player","player","Игрок в броне",12,21),equipment}
     ]:[{...walk("player:1","player","player","Игрок",-5,0),equipment:equipment.slice(0,2)},walk("npc:1","npc","player","Житель",6,0,2),walk("cow:1","mob","cow","Корова",-6,-7,1),walk("sheep:1","mob","sheep","Овца",-9,-6,3),walk("pig:1","mob","pig","Свинья",13,18,2)];
-    return send(response,{sceneId,epoch:"fixture-2",seq:Math.floor(t*5),capturedAt:Date.now(),reset:!url.searchParams.has("after"),loadedChunks:chunks.size,totalChunks:chunks.size,entities:[...entities,...displays],chunks:[...chunks.values()].map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
+    if (sceneId === "residents") entities = [walk("npc:1","npc","player","Житель",6,0,2)];
+    const allEntities = [...entities, ...displays]; latestActors.set(sceneId, allEntities);
+    const view = requestedView(url, scene.bounds);
+    const inView = [...chunks.values()].filter(chunk => chunk.x * 16 < view.maxX && (chunk.x + 1) * 16 > view.minX && chunk.z * 16 < view.maxZ && (chunk.z + 1) * 16 > view.minZ);
+    const visibleEntities = allEntities.filter(actor => actor.position[0] >= view.minX && actor.position[0] < view.maxX && actor.position[2] >= view.minZ && actor.position[2] < view.maxZ);
+    return send(response,{sceneId,view,epoch:"fixture-2",seq:Math.floor(t*5),capturedAt:Date.now(),reset:!url.searchParams.has("after"),loadedChunks:inView.length,totalChunks:inView.length,entities:visibleEntities,chunks:inView.map(({x,z})=>({x,z,revision:"1",url:`v1/scenes/${sceneId}/chunks/${x}/${z}/1.json`})),removedChunks:[]});
   }
   const chunkMatch=url.pathname.match(/^\/v1\/scenes\/([a-z_]+)\/chunks\/(-?\d+)\/(-?\d+)\/1\.json$/);
   const chunk=chunkMatch&&locations.some(location=>location.id===chunkMatch[1])&&(sceneChunks.get(chunkMatch[1])??sceneChunks.get("village")).get(`${chunkMatch[2]},${chunkMatch[3]}`);

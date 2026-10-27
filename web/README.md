@@ -68,12 +68,35 @@ and each explicit height window is 16–256 cells in multiples of 16. Real-world
 `minY` may be any integer. The adapter rebases terrain cells to Y=0 and offsets
 the terrain root; it never silently clips the full world height to 256.
 
-Frames are authoritative for actors and current chunk descriptors. The browser
-polls at 5 Hz, interpolates positions/yaw 250 ms behind the latest frames, stops
-motion when updates stop, and only fetches changed chunk revisions. Chunk
-decoding and meshing run in workers, with at most two chunk fetches in flight.
-Switching location or epoch clears stale state; catalog refresh also handles
-new bounds and asset revisions. Hidden tabs stop polling/rendering.
+Frames are authoritative for actors and chunk descriptors inside their accepted
+`view`. The browser sends a per-tab viewer ID and a conservative X/Z view hull
+across the complete declared height, snapped outwards with one chunk of context.
+The server filters before transfer. Off-view terrain omissions retain already
+loaded geometry; missing chunks inside the accepted view or explicit removals
+remove it. Same-sequence responses for a changed view are still applied.
+
+The browser polls frames at 5 Hz independently of terrain work. Two fetch/decode
+jobs refill immediately, prioritising camera-visible chunks and then context.
+Actor meshes are created in small animation-frame batches; distant pose work and
+raycasting are skipped. Unknown-sized ItemDisplays retain native mesh culling.
+Interpolation stays 250 ms behind observations and stops when updates stop.
+Transport heartbeat, delayed snapshots and frozen cached frames are separate
+states. Immutable model/atlas/chunk URLs use the browser's normal HTTP cache;
+mutable catalog, frame, saved-terrain index and detail requests use no-store.
+
+The site coordinator may provide `GET v1/scenes/:id/terrain?view=...` for a saved
+terrain bootstrap. It may establish the initial epoch before any live frame,
+with an explicit saved-state label. It never supplies actors, motion history or
+transport heartbeat. A late saved response cannot override live descriptors,
+resurrect a missing chunk or survive a scene/epoch change. The first live frame
+wins; the standalone plugin remains usable if this site endpoint is absent.
+
+Click/tap pins an actor card; Close or Escape dismisses it. Public details are
+fetched from `GET v1/scenes/:id/entities/:entityId` only for the pinned selection,
+at most once per second while visible. Provider labels and values are rendered
+as text. Warmup retries are bounded; a 404 reports that the actor left the area.
+Changing scene/selection cancels obsolete detail work. No inventory or private
+player information is inferred. Hidden tabs stop polling/rendering.
 
 ## Model coverage
 
@@ -123,6 +146,7 @@ and chest/bed/sign examples. Its second location has brick roofs, making stale
 terrain after a scene switch observable. It sends the production CSP and nosniff
 headers. It is never bundled into the plugin. The fixture captures its asset
 revision on startup; restart it after asset regeneration.
+A labelled resident inspection scene exercises the public detail-card contract.
 Inspection locations provide close views of animals, full player armour,
 chests, a bed, a fence corner and a wall. The animal row alternates ten seconds
 of movement and six seconds at rest, so the transition can be checked as well

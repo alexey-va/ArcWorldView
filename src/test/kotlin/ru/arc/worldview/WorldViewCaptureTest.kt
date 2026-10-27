@@ -43,11 +43,40 @@ class WorldViewCaptureTest : FunSpec({
         }
     }
 
-    test("active selection admits only the two most recent unexpired requested scenes") {
+    test("active selection excludes idle scenes and fairly rotates bounded lanes despite access order") {
         captureActiveScenes(mapOf("never" to 0, "old" to 84_999, "edge" to 85_000,
             "b" to 99_000, "a" to 99_000), 100_000, 15_000, 2) shouldBe listOf("a", "b")
         captureActiveScenes(mapOf("edge" to 85_000), 100_000, 15_000, 2) shouldBe listOf("edge")
         captureActiveScenes(mapOf("old" to 84_999), 100_000, 15_000, 2) shouldBe emptyList()
+        val access = mapOf("a" to 99_900L, "b" to 99_800L, "c" to 99_700L)
+        val admitted = (0L..8L).map { cursor ->
+            captureActiveScenes(access.mapValues { (_, value) -> value + cursor },
+                100_000, 15_000, 2, cursor)
+        }
+        admitted.all { it.size == 2 } shouldBe true
+        admitted.flatten().groupingBy { it }.eachCount() shouldBe mapOf("a" to 6, "b" to 6, "c" to 6)
+        captureActiveScenes(access, 100_000, 15_000, 2, 2) shouldBe listOf("c", "a")
+    }
+
+    test("native resource lanes cannot phase lock against rotating admission with four or eight scenes") {
+        for (count in listOf(3, 4, 8)) {
+            val ids = (0 until count).map { "scene-$it" }
+            for (stride in listOf(1, 2)) {
+                val lane = CaptureSceneLane()
+                val served = ids.associateWith { 0 }.toMutableMap()
+                for (tick in 1L..(count * 16).toLong()) {
+                    val active = captureActiveScenes(ids.associateWith { 99_000L + tick }, 100_000,
+                        15_000, 2, tick)
+                    if (tick % stride != 1L % stride) continue
+                    val chosen = lane.order(active).first()
+                    lane.attempted(chosen)
+                    served[chosen] = served.getValue(chosen) + 1
+                }
+                served.values.all { it > 0 } shouldBe true
+                lane.retain(listOf(ids.first()))
+                lane.order(listOf("new", ids.first())).first() shouldBe "new"
+            }
+        }
     }
 
     test("dirty during encoding publishes the accepted copy while retaining a new capture and stale unload cannot publish") {

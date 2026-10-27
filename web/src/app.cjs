@@ -18,20 +18,28 @@ const { sampleActor } = require("./actor-motion.cjs");
 const { configureModels,itemMesh,blockMesh,textMesh,armorParts } = require("./model-renderer.cjs");
 const { playerHandBone, playerHandGripMatrix, heldItemArmRotation } = require("./native-item-geometry.cjs");
 const { createAtmosphere } = require("./atmosphere.cjs");
+const { cameraView, cameraBounds, chunkInBounds, chunkPriority, actorPriority, frameConnection } = require("./view-priority.cjs");
 
 const $ = (id) => document.getElementById(id);
 const viewport = $("viewport");
 const baseUrl = new URL("./", window.location.href);
 const sceneSelect = $("scene");
+const viewerId = crypto.randomUUID();
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const actors = new Map(), loadedChunks = new Map(), pendingChunks = new Map(), decodeRequests = new Map(), skinTextures = new Map(), chunkControllers = new Set();
+const actors = new Map(), actorRecords = new Map(), loadedChunks = new Map(), pendingChunks = new Map(), decodeRequests = new Map(), skinTextures = new Map();
+const chunkDescriptors = new Map(), chunkRetries = new Map(), modelIssues = new Map();
 const terrainWarnings=new Map();
 const history = [];
 let assets, catalog, selectedScene, renderer, scene, camera, controls, terrain, terrainRoot, decoder, atmosphere;
 let generation = 0, epoch = null, sequence = -1, lastFrameAt = 0, lastLoopAt = 0, chunkRequestId = 0, loadedCount = 0, totalCount = 0;
-let cameraMode = "isometric", selectedActor = null, pollController = null, hasGeometry = false, span = 64, failedAssets = false;
+let cameraMode = "isometric", selectedActor = null, hoveredActor = null, pinnedActor = null, pollController = null, hasGeometry = false, span = 64, failedAssets = false;
+let lastTransportAt = 0, capturedAt = null, lastWorkAt = -Infinity, currentView = null, lastAcceptedView = null;
+let liveFramesSeen = false, sourceState = {}, bootstrapController = null;
 let catalogRefreshing = null;
-let workerFailed = false;
+let workerFailed = false, actorsDirty = true;
+let actorQueue = [];
+const compatibility = new Map();
+let pinnedRecord = null, detailData = null, detailController = null, detailTimer = null, detailToken = 0;
 
 function relativeUrl(value, parent = baseUrl) {
   const result = new URL(value, parent);
@@ -39,8 +47,8 @@ function relativeUrl(value, parent = baseUrl) {
   return result.href;
 }
 
-async function json(url, signal) {
-  const response = await fetch(url, { signal, credentials: "same-origin", cache: "no-store" });
+async function json(url, signal, cache = "no-store") {
+  const response = await fetch(url, { signal, credentials: "same-origin", cache });
   if (!response.ok) throw Object.assign(Error(`HTTP ${response.status}`), { status: response.status });
   return response.json();
 }
@@ -48,7 +56,7 @@ async function json(url, signal) {
 function connection(state, text) {
   const element = $("connection-text");
   if (element.textContent !== text) element.textContent = text;
-  element.parentElement.dataset.state = state;
+  if (element.parentElement.dataset.state !== state) element.parentElement.dataset.state = state;
 }
 
 function message(title, detail, retry = false) {
@@ -64,7 +72,7 @@ function workerFailure(event) {
   if (workerFailed) return;
   workerFailed = true;
   generation++; pollController?.abort();
-  for (const controller of chunkControllers) controller.abort();
+  for (const job of pendingChunks.values()) job.controller.abort();
   for (const pending of decodeRequests.values()) pending.reject(Error("Rendering worker stopped"));
   decodeRequests.clear();
   console.error("ArcWorldView rendering worker:", event.message || "Worker communication failed");
@@ -84,6 +92,8 @@ function disposeMesh(root) {
 function clearWorld() {
   hasGeometry = false;
   atmosphere?.reset();
+  bootstrapController?.abort(); bootstrapController = null;
+  liveFramesSeen = false; sourceState = {};
   history.length = 0;
   for (const actor of actors.values()) disposeMesh(actor.mesh);
   actors.clear();
@@ -91,13 +101,14 @@ function clearWorld() {
     const [x, z] = key.split(",").map(Number);
     terrain.removeColumn(x * 16, z * 16);
   }
-  loadedChunks.clear(); pendingChunks.clear();
-  terrainWarnings.clear();
-  for (const controller of chunkControllers) controller.abort();
-  chunkControllers.clear();
+  for (const job of pendingChunks.values()) job.controller.abort();
+  loadedChunks.clear(); pendingChunks.clear(); chunkDescriptors.clear(); chunkRetries.clear();
+  actorRecords.clear(); modelIssues.clear(); terrainWarnings.clear();
+  actorQueue = []; actorsDirty = true; currentView = null; lastWorkAt = -Infinity; lastAcceptedView = null;
   for (const pending of decodeRequests.values()) pending.reject(Error("Scene changed"));
   decodeRequests.clear();
-  selectedActor = null;
+  stopActorDetails();
+  selectedActor = hoveredActor = pinnedActor = null; pinnedRecord = detailData = null;
   $("actor-info").hidden = true;
   viewport.dataset.state = "loading";
 }
@@ -171,19 +182,36 @@ function initRenderer() {
   };
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
-  renderer.domElement.addEventListener("pointermove", (event) => {
-    if (event.buttons) return;
+  let pointerDown = null;
+  const activePointers = new Set();
+  const hitActor = event => {
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     raycaster.setFromCamera(pointer, camera);
-    const hit = raycaster.intersectObjects([...actors.values()].map((actor) => actor.mesh), true)[0];
+    const hit = raycaster.intersectObjects([...actors.values()].filter(actor => actor.mesh.visible).map(actor => actor.mesh), true)[0];
     let object = hit?.object;
     while (object && !object.userData.actorId) object = object.parent;
-    selectedActor = object?.userData.actorId ?? null;
-    renderer.domElement.style.cursor = selectedActor ? "pointer" : "grab";
-    showActor();
+    return object?.userData.actorId ?? null;
+  };
+  renderer.domElement.addEventListener("pointermove", event => {
+    if (event.buttons || event.pointerType === "touch") return;
+    hoveredActor = hitActor(event);
+    renderer.domElement.style.cursor = hoveredActor ? "pointer" : "grab";
+    if (!pinnedActor) { selectedActor = hoveredActor; showActor(); }
   });
-  renderer.domElement.addEventListener("pointerleave", () => { selectedActor = null; showActor(); });
+  renderer.domElement.addEventListener("pointerdown", event => {
+    activePointers.add(event.pointerId);
+    pointerDown = activePointers.size === 1 ? { x: event.clientX, y: event.clientY, id: event.pointerId, button: event.button } : null;
+  });
+  renderer.domElement.addEventListener("pointerup", event => {
+    if (pointerDown?.id === event.pointerId && pointerDown.button === 0 && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) < 6) pinActor(hitActor(event));
+    activePointers.delete(event.pointerId); pointerDown = null;
+  });
+  renderer.domElement.addEventListener("pointercancel", event => { activePointers.delete(event.pointerId); pointerDown = null; });
+  renderer.domElement.addEventListener("pointerleave", () => { hoveredActor = null; if (!pinnedActor) { selectedActor = null; showActor(); } });
+  renderer.domElement.addEventListener("keydown", event => {
+    if (event.key === "Enter" && hoveredActor) { event.preventDefault(); pinActor(hoveredActor); }
+  });
   for (const type of ["keydown", "keyup"]) document.querySelector(".world-toolbar").addEventListener(type, (event) => event.stopPropagation());
   new ResizeObserver(resize).observe(viewport);
   requestAnimationFrame(animate);
@@ -217,7 +245,7 @@ async function updateDisplay(actor,record) {
     for(const child of [...actor.display.content.children]) disposeMesh(child);
     actor.display.content.rotation.y=display.kind==="item" ? Math.PI : 0;
     actor.display.content.add(mesh);
-  } catch { if (actors.get(record.id)===actor) actor.modelError=true; }
+  } catch (error) { if (actors.get(record.id)===actor) actor.modelError=error.message; }
 }
 
 async function updateEquipment(actor,record) {
@@ -235,7 +263,7 @@ async function updateEquipment(actor,record) {
       try {
         const armor=armorParts(item,slot);
         if(armor) { for(const {bone,mesh} of armor) { actor.bones[bone].add(mesh); actor.equipmentMeshes.push(mesh); } continue; }
-      } catch { actor.modelError=true; continue; }
+      } catch (error) { actor.modelError=`${item.material}: ${error.message}`; continue; }
     }
     if(!["HAND","OFF_HAND","HEAD"].includes(slot)) continue;
     const bone=actor.bones[slot==="HEAD"?"head":playerHandBone(slot)];
@@ -246,7 +274,7 @@ async function updateEquipment(actor,record) {
       if(slot==="HEAD") { mesh.scale.setScalar(16); mesh.rotation.y=Math.PI; }
       else { mesh.matrixAutoUpdate=false; mesh.matrix.copy(playerHandGripMatrix(slot,record.skin?.model==="slim")); }
       bone.add(mesh); actor.equipmentMeshes.push(mesh);
-    } catch { actor.modelError=true; }
+    } catch (error) { actor.modelError=`${item.material}: ${error.message}`; }
   }
 }
 
@@ -272,7 +300,7 @@ async function loadSkin(actor, record) {
 function createActor(record) {
   if(record.kind==="display" && record.display) return displayActor(record);
   const type = String(record.type).replace(/^minecraft:/, "").toLowerCase();
-  if (!assets.supportedEntities.includes(type) || nativeEntityCompatibility(type, entityModels[type])) return null;
+  if (!compatibility.has(type) || compatibility.get(type)) return null;
   const mesh = new Entity(catalog.minecraftVersion, type, scene).mesh;
   mesh.userData.actorId = record.id;
   const actor = { mesh, type, record, phase: 0, bodies: [] };
@@ -292,34 +320,167 @@ function createActor(record) {
   return actor;
 }
 
-function updateActors(records, at) {
-  const current = new Map(records.map((record) => [record.id, record]));
-  history.push({ at, actors: current });
-  while (history.length > 8) history.shift();
-  let missing = 0;
-  for (const record of records) {
-    let actor = actors.get(record.id);
-    if (actor && actor.type !== String(record.type).replace(/^minecraft:/, "").toLowerCase()) { disposeMesh(actor.mesh); actors.delete(record.id); actor = null; }
-    actor ??= createActor(record);
-    if (!actor) { missing++; continue; }
-    actor.record = record;
-    if (actor.body) { loadSkin(actor, record).catch(() => { failedAssets = true; }); void updateEquipment(actor,record); }
-    if (actor.display) void updateDisplay(actor,record);
-    if (actor.modelError) missing++;
-  }
-  for (const [id, actor] of actors) if (!current.has(id)) { disposeMesh(actor.mesh); actors.delete(id); }
-  viewport.dataset.actors = String(actors.size);
-  if (missing || failedAssets || [...terrainWarnings.values()].some(Boolean)) notice("Часть моделей пока недоступна.");
+function actorType(record) { return String(record.type).replace(/^minecraft:/, "").toLowerCase(); }
+
+function modelIssue(record, reason) {
+  const type = actorType(record);
+  const previous = modelIssues.get(record.id);
+  if (previous?.reason !== reason) console.warn("ArcWorldView model unavailable", { type, reason });
+  modelIssues.set(record.id, { type, reason });
+}
+
+function updateModelNotice() {
+  const unavailable = [...new Set([...modelIssues.values()].map(issue => issue.type))];
+  viewport.dataset.missingModels = unavailable.join(",");
+  if (unavailable.length) {
+    const names = unavailable.slice(0,3).map(type => typeLabels[type] || type);
+    notice(`Пока не отображаются: ${names.join(", ")}${unavailable.length > 3 ? " и ещё несколько моделей" : ""}.`);
+  } else if (failedAssets) notice("Часть текстур не загрузилась.");
+  else if ([...terrainWarnings.values()].some(blocks => blocks.length)) notice("Часть блоков ещё не поддерживается просмотром.");
   else notice("");
 }
 
-const typeLabels = { cow: "Корова", sheep: "Овца", pig: "Свинья", chicken: "Курица", horse: "Лошадь", villager: "Житель", wolf: "Волк", cat: "Кошка", rabbit: "Кролик", iron_golem: "Железный голем" };
+function updateActors(records, at) {
+  const current = new Map(records.map(record => [record.id, record]));
+  history.push({ at, actors: current });
+  while (history.length > 8) history.shift();
+  actorRecords.clear();
+  for (const [id, record] of current) {
+    actorRecords.set(id, record);
+    const type = actorType(record);
+    const reason = record.kind === "display" ? null : compatibility.get(type) ?? "native-model-unavailable";
+    if (reason) modelIssue(record, reason);
+    const actor = actors.get(id);
+    if (actor && actor.type !== type) { disposeMesh(actor.mesh); actors.delete(id); }
+    else if (actor) actor.record = record;
+  }
+  for (const [id, actor] of actors) if (!current.has(id)) { disposeMesh(actor.mesh); actors.delete(id); }
+  for (const id of modelIssues.keys()) if (!current.has(id)) modelIssues.delete(id);
+  if (pinnedActor && current.has(pinnedActor)) pinnedRecord = current.get(pinnedActor);
+  actorsDirty = true;
+  showActor(); updateModelNotice();
+}
+
+function syncActors() {
+  if (actorsDirty) {
+    actorQueue = [];
+    for (const record of actorRecords.values()) {
+      const priority = actorPriority(record, currentView);
+      const wanted = Number.isFinite(priority);
+      const actor = actors.get(record.id);
+      if (actor) {
+        actor.mesh.visible = wanted;
+        if (wanted) {
+          if (actor.body) { loadSkin(actor, record).catch(() => { failedAssets = true; }); void updateEquipment(actor, record); }
+          if (actor.display) void updateDisplay(actor, record);
+          if (actor.modelError) modelIssue(record, typeof actor.modelError === "string" ? actor.modelError : "equipment-or-display-unavailable");
+          else modelIssues.delete(record.id);
+        }
+      } else if (wanted && !modelIssues.has(record.id)) actorQueue.push({ record, priority });
+    }
+    actorQueue.sort((a,b) => a.priority - b.priority);
+    actorsDirty = false; updateModelNotice();
+  }
+  // Mesh construction and its asset requests cannot monopolise a live frame.
+  const started = performance.now();
+  for (let count = 0; count < 2 && actorQueue.length && performance.now() - started < 3; count++) {
+    const { record } = actorQueue.shift();
+    if (!actorRecords.has(record.id) || actors.has(record.id)) continue;
+    try {
+      const actor = createActor(record);
+      if (!actor) { modelIssue(record, "native-model-unavailable"); continue; }
+      actor.record = actorRecords.get(record.id);
+      if (actor.body) void updateEquipment(actor, actor.record);
+      if (actor.display) void updateDisplay(actor, actor.record);
+    } catch (error) { modelIssue(record, error.message); }
+  }
+  viewport.dataset.actors = String(actors.size);
+}
+
+const typeLabels = { cow: "Корова", sheep: "Овца", pig: "Свинья", chicken: "Курица", horse: "Лошадь", villager: "Житель", wolf: "Волк", cat: "Кошка", rabbit: "Кролик", iron_golem: "Железный голем", player: "Житель", pillager: "Разбойник", squid: "Спрут", item: "Предметы на земле" };
 function showActor() {
-  const actor = actors.get(selectedActor);
-  $("actor-info").hidden = !actor;
-  if (!actor) return;
-  $("actor-name").textContent = actor.record.name || typeLabels[actor.type] || "Существо";
-  $("actor-kind").textContent = actor.record.kind === "player" ? "Игрок" : actor.record.kind === "npc" ? "Житель поселения" : typeLabels[actor.type] || "Обитатель мира";
+  const record = actorRecords.get(selectedActor) ?? (selectedActor === pinnedActor ? pinnedRecord : null);
+  $("actor-info").hidden = !record;
+  if (!record) return;
+  $("actor-info").dataset.pinned = String(Boolean(pinnedActor));
+  $("actor-close").hidden = !pinnedActor;
+  $("actor-name").textContent = (pinnedActor && detailData?.title) || record.name || typeLabels[actorType(record)] || "Существо";
+  $("actor-kind").textContent = record.kind === "player" ? "Игрок" : record.kind === "npc" ? "Житель поселения" : typeLabels[actorType(record)] || "Обитатель мира";
+  $("actor-select-hint").hidden = Boolean(pinnedActor);
+  if (pinnedActor) renderActorDetails(record);
+}
+
+function stopActorDetails() {
+  detailToken++; clearTimeout(detailTimer); detailTimer = null;
+  detailController?.abort(); detailController = null;
+}
+
+function renderActorDetails(record) {
+  const fields = detailData?.fields ?? [];
+  const list = $("actor-details"), signature = JSON.stringify(fields);
+  if (list.dataset.fields !== signature || !list.lastElementChild) {
+    const rows = document.createDocumentFragment();
+    for (const field of fields) {
+      if (typeof field.label !== "string" || typeof field.value !== "string") continue;
+      const label = document.createElement("dt"), value = document.createElement("dd");
+      label.textContent = field.label; value.textContent = field.value;
+      rows.append(label, value);
+    }
+    rows.append(document.createElement("dt"), document.createElement("dd"));
+    list.replaceChildren(rows); list.dataset.fields = signature;
+  }
+  const label = actorRecords.has(record.id) ? "Положение" : "Последняя позиция";
+  const value = record.position.map(Math.floor).join(", ");
+  if (list.lastElementChild.previousElementSibling.textContent !== label) list.lastElementChild.previousElementSibling.textContent = label;
+  if (list.lastElementChild.textContent !== value) list.lastElementChild.textContent = value;
+}
+
+function pinActor(id) {
+  stopActorDetails();
+  pinnedActor = selectedActor = id;
+  pinnedRecord = id ? actorRecords.get(id) : null;
+  detailData = null;
+  $("actor-details").replaceChildren();
+  $("actor-detail-state").hidden = true;
+  $("actor-retry").hidden = true;
+  showActor();
+  if (pinnedRecord) void loadActorDetails(detailToken, generation, selectedScene.id, id, 0);
+}
+
+async function loadActorDetails(token, sceneGeneration, sceneId, id, failures) {
+  const current = () => token === detailToken && sceneGeneration === generation && pinnedActor === id;
+  if (!current()) return;
+  if (document.hidden) { detailTimer = setTimeout(() => loadActorDetails(token, sceneGeneration, sceneId, id, failures), 1000); return; }
+  const state = $("actor-detail-state");
+  if (!detailData) { state.hidden = false; state.textContent = "Загружаем сведения…"; }
+  const controller = new AbortController(); detailController = controller;
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  let again = true, nextFailures = 0;
+  try {
+    const url = new URL(`v1/scenes/${encodeURIComponent(sceneId)}/entities/${encodeURIComponent(id)}`, baseUrl);
+    const result = await json(url, controller.signal);
+    if (!current()) return;
+    if (result.id !== id || !Array.isArray(result.fields)) throw Error("Unexpected entity details");
+    detailData = result;
+    $("actor-retry").hidden = true;
+    state.hidden = true;
+    showActor();
+  } catch (error) {
+    if (!current()) return;
+    state.hidden = false;
+    if (error.status === 404) {
+      state.textContent = "Больше не находится в этой области."; again = false;
+    } else {
+      nextFailures = failures + 1;
+      state.textContent = error.status === 425 ? "Сведения о жителе ещё готовятся." : "Не удалось обновить сведения.";
+      again = nextFailures < 4;
+      $("actor-retry").hidden = again;
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (detailController === controller) detailController = null;
+    if (current() && again) detailTimer = setTimeout(() => loadActorDetails(token, sceneGeneration, sceneId, id, nextFailures), 1000);
+  }
 }
 
 function applyActorPose(actor, value, delta) {
@@ -364,29 +525,86 @@ function applyActorPose(actor, value, delta) {
   }
 }
 
+function viewQuery(url) {
+  const view = cameraBounds(camera, selectedScene.bounds);
+  url.searchParams.set("view", [view.minX, view.minZ, view.maxX, view.maxZ].join(","));
+  return url;
+}
+
+async function bootstrapTerrain(expectedGeneration) {
+  const sceneId = selectedScene.id, controller = new AbortController();
+  bootstrapController = controller;
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const url = viewQuery(new URL(`v1/scenes/${encodeURIComponent(sceneId)}/terrain`, baseUrl));
+    const saved = await json(url, controller.signal);
+    if (expectedGeneration !== generation || selectedScene.id !== sceneId || liveFramesSeen || epoch !== null && epoch !== saved.epoch) return;
+    if (saved.sceneId !== sceneId || !Array.isArray(saved.chunks)) return;
+    epoch = saved.epoch;
+    for (const chunk of saved.chunks) chunkDescriptors.set(`${chunk.x},${chunk.z}`, chunk);
+    loadedCount = saved.loadedChunks; totalCount = saved.totalChunks;
+    connection("saved", "Сохранённая местность");
+    $("coverage").textContent = "Подключаемся к живому миру";
+    pumpChunks();
+  } catch { /* A missing saved snapshot never delays the independent live loop. */ }
+  finally {
+    clearTimeout(timeout);
+    if (bootstrapController === controller) bootstrapController = null;
+  }
+}
+
+function pumpChunks() {
+  if (document.hidden || workerFailed || !selectedScene || !camera || pendingChunks.size >= 2) return;
+  currentView = cameraView(camera, controls.target, selectedScene.bounds);
+  const now = performance.now();
+  const needed = [...chunkDescriptors.values()].filter(chunk => {
+    const key = `${chunk.x},${chunk.z}`;
+    return loadedChunks.get(key) !== chunk.revision && !pendingChunks.has(key) && (chunkRetries.get(key)?.at ?? 0) <= now;
+  }).map(chunk => ({ chunk, priority: chunkPriority(chunk, currentView) })).filter(entry => Number.isFinite(entry.priority)).sort((a,b) => a.priority - b.priority);
+  for (const { chunk } of needed.slice(0, 2 - pendingChunks.size)) void fetchChunk(chunk, generation);
+}
+
 async function fetchChunk(descriptor, expectedGeneration) {
   const expectedEpoch = epoch;
   const key = `${descriptor.x},${descriptor.z}`;
-  if (loadedChunks.get(key) === descriptor.revision || pendingChunks.get(key) === descriptor.revision) return;
-  pendingChunks.set(key, descriptor.revision);
+  if (loadedChunks.get(key) === descriptor.revision || pendingChunks.has(key)) return;
   const controller = new AbortController();
-  chunkControllers.add(controller);
+  const job = { revision: descriptor.revision, controller };
+  pendingChunks.set(key, job);
+  const current = () => expectedGeneration === generation && expectedEpoch === epoch && pendingChunks.get(key) === job && chunkDescriptors.get(key)?.revision === descriptor.revision && !controller.signal.aborted;
   const timeout = setTimeout(() => controller.abort(), 8000);
+  let decodeId;
   try {
-    const chunk = await json(relativeUrl(descriptor.url), controller.signal);
-    if (expectedGeneration !== generation || expectedEpoch !== epoch) return;
+    const chunk = await json(relativeUrl(descriptor.url), controller.signal, "default");
+    if (!current()) return;
     if (chunk.minY !== selectedScene.bounds.minY || chunk.height !== selectedScene.bounds.maxY - selectedScene.bounds.minY) throw Error("Chunk height differs from scene bounds");
-    const id = ++chunkRequestId;
-    const decoded = await new Promise((resolve, reject) => { decodeRequests.set(id, { resolve, reject }); decoder.postMessage({ id, chunk, version: catalog.minecraftVersion }); });
-    if (expectedGeneration !== generation || expectedEpoch !== epoch || pendingChunks.get(key) !== descriptor.revision) return;
+    decodeId = ++chunkRequestId;
+    const decoded = await new Promise((resolve, reject) => {
+      const abort = () => { decodeRequests.delete(decodeId); reject(Error("Chunk work cancelled")); };
+      controller.signal.addEventListener("abort", abort, { once: true });
+      const finish = callback => value => { controller.signal.removeEventListener("abort", abort); callback(value); };
+      decodeRequests.set(decodeId, { resolve: finish(resolve), reject: finish(reject) });
+      decoder.postMessage({ id: decodeId, chunk, version: catalog.minecraftVersion });
+    });
+    if (!current()) return;
     terrain.addColumn(descriptor.x * 16, descriptor.z * 16, decoded);
     atmosphere.setChunk(key, chunk);
-    terrainWarnings.set(key,chunk.palette.some((block) => assets.unsupportedBlocks?.includes(block.replace(/^minecraft:/,"").split("[")[0])));
+    terrainWarnings.set(key, chunk.palette.filter(block => assets.unsupportedBlocks?.includes(block.replace(/^minecraft:/, "").split("[")[0])));
     loadedChunks.set(key, descriptor.revision);
+    chunkRetries.delete(key);
     viewport.dataset.chunks = String(loadedChunks.size);
+    updateModelNotice();
   } catch (error) {
-    if (expectedGeneration === generation && expectedEpoch === epoch && error.status !== 410) notice("Не все участки успели загрузиться. Повторяем загрузку.");
-  } finally { clearTimeout(timeout); chunkControllers.delete(controller); if (expectedGeneration === generation && expectedEpoch === epoch && pendingChunks.get(key) === descriptor.revision) pendingChunks.delete(key); }
+    if (expectedGeneration === generation && expectedEpoch === epoch && pendingChunks.get(key) === job && chunkDescriptors.get(key)?.revision === descriptor.revision) {
+      chunkRetries.set(key, { at: performance.now() + 1000 });
+      if (error.status !== 410 && !controller.signal.aborted) notice("Не все участки успели загрузиться. Повторяем загрузку.");
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (decodeId) decodeRequests.delete(decodeId);
+    if (pendingChunks.get(key) === job) pendingChunks.delete(key);
+    if (expectedGeneration === generation && expectedEpoch === epoch) pumpChunks();
+  }
 }
 
 async function receiveFrame(frame, expectedGeneration) {
@@ -396,40 +614,59 @@ async function receiveFrame(frame, expectedGeneration) {
     if (expectedGeneration !== generation) return;
   }
   if (epoch !== frame.epoch || frame.reset && sequence >= 0 && sequence !== frame.seq) { clearWorld(); epoch = frame.epoch; }
-  const fresh=sequence!==frame.seq;
+  const acceptedView = frame.view ?? selectedScene.bounds;
+  const viewKey = JSON.stringify([acceptedView.minX, acceptedView.minZ, acceptedView.maxX, acceptedView.maxZ]);
+  const fresh = sequence !== frame.seq || lastAcceptedView !== viewKey;
+  lastAcceptedView = viewKey;
   sequence = frame.seq;
-  if(fresh) lastFrameAt = performance.now();
+  liveFramesSeen = true; bootstrapController?.abort();
+  lastTransportAt = performance.now(); capturedAt = frame.capturedAt;
+  sourceState = { stale: Boolean(frame.stale), frozen: Boolean(frame.frozen) };
+  if(fresh) lastFrameAt = lastTransportAt;
   loadedCount = frame.loadedChunks; totalCount = frame.totalChunks;
   if(fresh) updateActors(frame.entities, lastFrameAt);
-  const current = new Set(frame.chunks.map((chunk) => `${chunk.x},${chunk.z}`));
-  for (const key of loadedChunks.keys()) if (!current.has(key)) {
-    const [x, z] = key.split(",").map(Number); terrain.removeColumn(x * 16, z * 16); loadedChunks.delete(key); terrainWarnings.delete(key);
-    atmosphere.removeChunk(key);
+  chunkDescriptors.clear();
+  for (const chunk of frame.chunks) chunkDescriptors.set(`${chunk.x},${chunk.z}`, chunk);
+  for (const [key, job] of pendingChunks) if (chunkDescriptors.get(key)?.revision !== job.revision) job.controller.abort();
+  const current = new Set(chunkDescriptors.keys());
+  const removed = new Set((frame.removedChunks ?? []).map(chunk => `${chunk.x},${chunk.z}`));
+  for (const key of loadedChunks.keys()) {
+    const [x, z] = key.split(",").map(Number);
+    if (removed.has(key) || frame.terrainComplete !== false && !current.has(key) && chunkInBounds(x, z, acceptedView)) {
+      terrain.removeColumn(x * 16, z * 16); loadedChunks.delete(key); terrainWarnings.delete(key);
+      atmosphere.removeChunk(key);
+    }
   }
-  // Only two new chunks in flight keeps the browser responsive during the first panorama.
-  const needed = frame.chunks.filter((chunk) => loadedChunks.get(`${chunk.x},${chunk.z}`) !== chunk.revision && !pendingChunks.has(`${chunk.x},${chunk.z}`));
-  for (const chunk of needed.slice(0, Math.max(0, 2 - pendingChunks.size))) void fetchChunk(chunk, expectedGeneration);
-  $("coverage").textContent = loadedCount < totalCount ? `Доступно ${loadedCount} из ${totalCount} участков` : "Игроки и жители в реальном времени";
-  if(performance.now()-lastFrameAt<3000) connection("live", "В прямом эфире");
-  if (frame.entities.length && !frame.chunks.length) message("Мир ещё загружается", "В этой локации пока нет загруженных участков.");
-  if (!frame.chunks.length && !frame.entities.length) message("Здесь пока тихо", "Локация появится, когда сервер загрузит её участки.");
+  pumpChunks();
+  $("coverage").textContent = sourceState.frozen ? "Последнее доступное состояние мира" : loadedCount < totalCount ? `Доступно ${loadedCount} из ${totalCount} участков` : "Игроки и жители в реальном времени";
+  const status = frameConnection(performance.now(), lastTransportAt, lastFrameAt, capturedAt, Date.now(), sourceState);
+  connection(status.state, status.text);
+  if (!hasGeometry && frame.entities.length && !frame.chunks.length) message("Мир ещё загружается", "В этой локации пока нет загруженных участков.");
+  if (!hasGeometry && !frame.chunks.length && !frame.entities.length) message("Здесь пока тихо", "Локация появится, когда сервер загрузит её участки.");
 }
 
 async function poll(expectedGeneration) {
   while (expectedGeneration === generation) {
     const started = performance.now();
     if (!document.hidden) {
-      pollController = new AbortController();
-      const timeout = setTimeout(() => pollController?.abort(), 5000);
+      const controller = new AbortController(); pollController = controller;
+      const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        const url = new URL(`v1/scenes/${encodeURIComponent(selectedScene.id)}/frame`, baseUrl);
+        const url = viewQuery(new URL(`v1/scenes/${encodeURIComponent(selectedScene.id)}/frame`, baseUrl));
         if (sequence >= 0) url.searchParams.set("after", String(sequence));
-        const frame = await json(url, pollController.signal);
+        url.searchParams.set("viewer", viewerId);
+        const frame = await json(url, controller.signal);
         await receiveFrame(frame, expectedGeneration);
       } catch (error) {
         if (expectedGeneration !== generation) return;
-        connection("stale", "Восстанавливаем связь");
-        if (!hasGeometry) message("Пока нет связи с миром", "Повторяем подключение автоматически. Локация останется выбранной.", true);
+        if (!liveFramesSeen && chunkDescriptors.size) connection("saved", "Сохранённая местность");
+        else if (error.status === 425) {
+          connection("idle", "Мир загружается");
+          if (!hasGeometry) message("Открываем локацию", "Сервер готовит первые участки.");
+        } else {
+          connection("stale", "Восстанавливаем связь");
+          if (!hasGeometry) message("Пока нет связи с миром", "Повторяем подключение автоматически. Локация останется выбранной.", true);
+        }
       } finally { clearTimeout(timeout); }
     }
     await new Promise((resolve) => setTimeout(resolve, Math.max(20, (document.hidden ? 1000 : 200) - (performance.now() - started))));
@@ -441,7 +678,7 @@ function selectScene(id) {
   const next = catalog.scenes.find((item) => item.id === id);
   if (!next) return;
   generation++; pollController?.abort();
-  selectedScene = next; sequence = -1; epoch = null; lastFrameAt = 0;
+  selectedScene = next; sequence = -1; epoch = null; lastFrameAt = 0; lastTransportAt = 0; capturedAt = null;
   clearWorld(); terrainRoot.position.y = next.bounds.minY;
   atmosphere.setBounds(next.bounds);
   $("scene-name").textContent = next.name;
@@ -450,6 +687,7 @@ function selectScene(id) {
   message("Открываем локацию", next.name);
   frameScene("isometric");
   const url = new URL(window.location.href); url.searchParams.set("scene", id); historyReplace(url);
+  void bootstrapTerrain(generation);
   void poll(generation);
 }
 
@@ -464,9 +702,9 @@ function setSceneOptions(preferred) {
 
 async function readAssets(nextCatalog) {
   const manifestUrl = relativeUrl(nextCatalog.assetsUrl);
-  const nextAssets = { ...await json(manifestUrl), manifestUrl };
+  const nextAssets = { ...await json(manifestUrl, undefined, "default"), manifestUrl };
   if (nextAssets.minecraftVersion !== nextCatalog.minecraftVersion) throw Error("Asset version differs from the world");
-  const blockStates = await json(relativeUrl(nextAssets.blockStates,manifestUrl));
+  const blockStates = await json(relativeUrl(nextAssets.blockStates,manifestUrl), undefined, "default");
   return { assets:nextAssets,blockStates };
 }
 
@@ -474,6 +712,8 @@ function applyAssets(nextAssets) {
   assets = nextAssets;
   failedAssets=false;
   setAssets(assets);
+  compatibility.clear();
+  for (const type of assets.supportedEntities) compatibility.set(type, entityModels[type] ? nativeEntityCompatibility(type, entityModels[type]) || "" : "native-model-unavailable");
   for (const [type, textures] of Object.entries(assets.entityTemplateTextures ?? {})) if (entityModels[type]) Object.assign(entityModels[type].textures, textures);
 }
 
@@ -508,14 +748,29 @@ function animate(now) {
   if (document.hidden || workerFailed) { lastLoopAt = now; return; }
   const delta = Math.min((now - lastLoopAt) / 1000, 0.1); lastLoopAt = now;
   controls.update();
+  if (selectedScene && now - lastWorkAt >= 120) {
+    currentView = cameraView(camera, controls.target, selectedScene.bounds);
+    pumpChunks(); actorsDirty = true; lastWorkAt = now;
+    const visibleColumns = new Set();
+    for (const key of loadedChunks.keys()) {
+      const [x,z] = key.split(",").map(Number);
+      if (Number.isFinite(chunkPriority({ x,z }, currentView))) visibleColumns.add(key);
+    }
+    for (const [key, mesh] of Object.entries(terrain.sectionMeshs)) {
+      const [x,,z] = key.split(",").map(Number);
+      mesh.visible = visibleColumns.has(`${x / 16},${z / 16}`);
+    }
+  }
+  if (currentView) syncActors();
   for (const [id, actor] of actors) {
+    if (!actor.mesh.visible) continue;
     const value = sampleActor(history, id, now);
     if (value) applyActorPose(actor, value, delta);
   }
   if (!hasGeometry && Object.keys(terrain.sectionMeshs).length && loadedChunks.size) {
     hasGeometry = true; $("scene-message").hidden = true; viewport.dataset.state = "ready";
   }
-  if (lastFrameAt && now - lastFrameAt > 3000) connection("stale", "Связь прервалась");
+  if (lastTransportAt) { const status = frameConnection(now, lastTransportAt, lastFrameAt, capturedAt, Date.now(), sourceState); connection(status.state, status.text); }
   atmosphere.render(now);
 }
 
@@ -541,6 +796,9 @@ async function start() {
 }
 
 sceneSelect.addEventListener("change", () => selectScene(sceneSelect.value));
+$("actor-close").addEventListener("click", () => { pinActor(null); renderer?.domElement.focus(); });
+$("actor-retry").addEventListener("click", () => { if (pinnedActor) { stopActorDetails(); $("actor-retry").hidden = true; void loadActorDetails(detailToken, generation, selectedScene.id, pinnedActor, 0); } });
+window.addEventListener("keydown", event => { if (event.key === "Escape" && pinnedActor) pinActor(null); });
 $("isometric").addEventListener("click", () => frameScene("isometric"));
 $("top-view").addEventListener("click", () => frameScene("top"));
 $("reset-view").addEventListener("click", () => frameScene());

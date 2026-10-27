@@ -147,7 +147,7 @@ class VerifyJarTest(unittest.TestCase):
         self.make_host(descriptor="name: AnotherPlugin\n")
         with self.assertRaisesRegex(ValueError, "name: ArcCore"):
             self.verify()
-        self.make_host(omit=(verifier.SCENE_API_CLASSES[4],))
+        self.make_host(omit=("ru/arc/paper/api/ArcSceneEquipment.class",))
         with self.assertRaisesRegex(ValueError, "missing required ArcScene API types: ArcSceneEquipment"):
             self.verify()
         self.make_host(omit=(verifier.SCENE_PROVIDER,))

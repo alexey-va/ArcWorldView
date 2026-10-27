@@ -29,6 +29,7 @@ FORBIDDEN_CLASS_PREFIXES = (
     "ru/arc/paper/packet/PaperVisualPacketRuntime",
     "ru/arc/paper/runtime/PaperNativeCleanupServiceProvider",
     "ru/arc/paper/scene/PaperSceneObservationServiceProvider",
+    "ru/arc/paper/scene/PaperSceneEntityInfoServiceProvider",
 )
 
 MAIN_CLASS = "ru/arc/worldview/ArcWorldViewPlugin.class"
@@ -40,6 +41,10 @@ SCENE_API_CLASSES = tuple(
         "ArcSceneBounds",
         "ArcSceneChunkListener",
         "ArcSceneEntity",
+        "ArcSceneEntityInfoService",
+        "ArcSceneEntityInfoSource",
+        "ArcSceneEntityInfo",
+        "ArcSceneInfoField",
         "ArcSceneEntitySource",
         "ArcSceneEquipment",
         "ArcSceneLocation",
