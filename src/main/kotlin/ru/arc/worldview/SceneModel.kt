@@ -62,6 +62,8 @@ object ChunkEncoder {
     fun encode(snapshot: ChunkSnapshot, key: ChunkKey, bounds: SceneBounds, worldMinY: Int, worldMaxY: Int): EncodedChunk {
         val rawPalette = mutableListOf("minecraft:air")
         val rawIndices = hashMapOf("minecraft:air" to 0)
+        // Snapshot wrappers compare by complete block state; serialize each state once per chunk.
+        val blockIndices = HashMap<BlockData, Int>()
         val opaque = mutableListOf(false)
         val cells = IntArray(256 * bounds.height)
         var cursor = 0
@@ -69,9 +71,11 @@ object ChunkEncoder {
             val worldX = (key.x shl 4) + x; val worldZ = (key.z shl 4) + z
             val data = if (worldX < bounds.minX || worldX >= bounds.maxX || worldZ < bounds.minZ || worldZ >= bounds.maxZ ||
                 y < worldMinY || y >= worldMaxY) null else snapshot.getBlockData(x, y, z)
-            val state = data?.asString ?: "minecraft:air"
-            cells[cursor++] = rawIndices.getOrPut(state) {
-                rawPalette.add(state); opaque.add(data != null && opaqueFullCube(data)); rawPalette.lastIndex
+            cells[cursor++] = if (data == null) 0 else blockIndices.getOrPut(data) {
+                val state = data.asString
+                rawIndices.getOrPut(state) {
+                    rawPalette.add(state); opaque.add(opaqueFullCube(data)); rawPalette.lastIndex
+                }
             }
         }
         val palette = mutableListOf("minecraft:air")
